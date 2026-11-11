@@ -69,8 +69,9 @@ Room links are invitations: anyone with the link can join while the room is betw
 
 ## Game rules and product decisions
 
-- Canonical traditional and online rules: [docs/what-if-game-rules.md](docs/what-if-game-rules.md)
-- Online-game interview decisions: [docs/interviews/online-game-requirements.md](docs/interviews/online-game-requirements.md)
+- Canonical traditional and online rules: [docs/requirements/what-if-game-rules.md](docs/requirements/what-if-game-rules.md)
+- Online-game requirements: [docs/requirements/online-game-requirements.md](docs/requirements/online-game-requirements.md)
+- Dated interview archive: [docs/interviews/README.md](docs/interviews/README.md)
 
 ## Checks
 

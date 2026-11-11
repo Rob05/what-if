@@ -197,6 +197,11 @@ function RoomPage({ roomId, onLeave }) {
           if (message.type === 'state') {
             setRoom(message.state)
             setError('')
+            if (message.state.phase === 'closed') {
+              window.localStorage.removeItem(`${SESSION_PREFIX}${roomId}`)
+              setCredentials(null)
+              setSocketStatus('connected')
+            }
           }
         } catch (parseError) {
           setError(`Could not read the room update: ${parseError.message}`)
@@ -260,6 +265,12 @@ function RoomPage({ roomId, onLeave }) {
       if (payload.state) {
         setRoom(payload.state)
       }
+      if (action === 'delete-room') {
+        window.localStorage.removeItem(`${SESSION_PREFIX}${roomId}`)
+        socketRef.current?.close()
+        setCredentials(null)
+        setSocketStatus('connected')
+      }
       if (action === 'leave') {
         window.localStorage.removeItem(`${SESSION_PREFIX}${roomId}`)
         socketRef.current?.close()
@@ -296,6 +307,17 @@ function RoomPage({ roomId, onLeave }) {
 
   if (!room) {
     return <main className="loading-screen">Loading room…</main>
+  }
+
+  if (room.phase === 'closed') {
+    return (
+      <main className="error-screen">
+        <p className="eyebrow">Room closed</p>
+        <h1>This room is no longer available.</h1>
+        <p>The room has been closed. Its saved data is retained.</p>
+        <button className="button button-primary" type="button" onClick={onLeave}>Back to home</button>
+      </main>
+    )
   }
 
   if (!credentials || !myPlayer) {
@@ -339,7 +361,7 @@ function RoomPage({ roomId, onLeave }) {
     && room.players.every((player) => player.ready && player.connected)
   const myTurn = room.nextReveal?.playerId === myPlayer.id
   const nextIsQuestion = room.phase === 'revealing' && !room.nextReveal
-  const canStartRound = ['lobby', 'completed'].includes(room.phase) && allReady
+  const canStartRound = room.phase === 'lobby' && allReady
   const canResume = room.phase === 'paused' && pausedReady
   const canDistribute = room.phase === 'submitting'
     && room.allSubmitted
@@ -383,6 +405,11 @@ function RoomPage({ roomId, onLeave }) {
               me={myPlayer}
               onReady={(ready) => act('ready', { ready })}
               onStart={() => act('start-round')}
+              onDelete={() => {
+                if (window.confirm('Close this room for everyone? Players will lose access, but saved data will be retained.')) {
+                  act('delete-room')
+                }
+              }}
               canStart={canStartRound}
             />
           )}
@@ -417,10 +444,13 @@ function RoomPage({ roomId, onLeave }) {
 
           {room.phase === 'completed' && (
             <CompletedPanel
-                me={myPlayer}
-              onReady={(ready) => act('ready', { ready })}
-              onStart={() => act('start-round')}
-              canStart={canStartRound}
+              room={room}
+              onNextRound={() => act('begin-next-round')}
+              onEndGame={() => {
+                if (window.confirm('End the game? Everyone will return to the lobby, where all completed rounds remain available to review.')) {
+                  act('end-game')
+                }
+              }}
             />
           )}
         </section>
@@ -439,14 +469,15 @@ function RoomPage({ roomId, onLeave }) {
   )
 }
 
-function LobbyPanel({ room, me, onReady, onStart, canStart }) {
+function LobbyPanel({ room, me, onReady, onStart, onDelete, canStart }) {
   return (
     <section className="stage-card">
       <span className="stage-number">01 / READY UP</span>
-      <h2>Everyone in? Get ready.</h2>
+      <h2>{room.gameEnded ? 'The game has ended.' : 'Everyone in? Get ready.'}</h2>
       <p className="stage-copy">
-        A round starts when at least two players are connected and everyone is ready.
-        Any player can kick things off once the room is set.
+        {room.gameEnded
+          ? 'The room is still open. Review completed rounds or ready up to play again.'
+          : 'A round starts when at least two players are connected and everyone is ready. Any player can kick things off once the room is set.'}
       </p>
       <div className="stage-action-row">
         <button
@@ -471,6 +502,12 @@ function LobbyPanel({ room, me, onReady, onStart, canStart }) {
             ? 'Invite at least one more player to begin.'
             : 'Waiting for every connected player to mark Ready.'}
         </p>
+      )}
+      <RoundHistory history={room.history} />
+      {room.gameEnded && (
+        <button className="button button-danger" type="button" onClick={onDelete}>
+          Delete room
+        </button>
       )}
     </section>
   )
@@ -585,7 +622,9 @@ function RevealPanel({ room, myTurn, nextIsQuestion, onReveal }) {
               <span className="reveal-index">{String(index + 1).padStart(2, '0')}</span>
               <div>
                 <span className="reveal-label">
-                  {revealItem.type === 'question' ? 'QUESTION' : 'ANSWER'} · {revealItem.nickname}
+                  {revealItem.type === 'question' ? 'QUESTION' : 'ANSWER'}
+                  {' · CARD BY '}
+                  {revealItem.authorNickname ?? 'AUTHOR UNAVAILABLE'}
                 </span>
                 <p>{revealItem.text}</p>
               </div>
@@ -640,29 +679,64 @@ function PausedPanel({ me, canResume, onReady, onResume }) {
   )
 }
 
-function CompletedPanel({ me, onReady, onStart, canStart }) {
+function CompletedPanel({ room, onNextRound, onEndGame }) {
   return (
     <section className="stage-card completed-stage">
       <span className="stage-number">ROUND COMPLETE</span>
       <h2>That was a good what-if.</h2>
       <p className="stage-copy">
-        The room is open for another round. New players can join now; everyone marks Ready
-        before any player starts the next round.
+        The final answer will stay here until someone chooses what happens next.
       </p>
-      <div className="stage-action-row">
-        <button
-          className={`button ${me.ready ? 'button-ready' : 'button-primary'}`}
-          type="button"
-          onClick={() => onReady(!me.ready)}
-        >
-          {me.ready ? 'You’re ready ✓' : 'Ready for another'}
+      <RevealList reveals={room.reveals} />
+      <div className="stage-action-row round-end-actions">
+        <button className="button button-primary" type="button" onClick={onNextRound}>
+          Start another round
         </button>
-        <button className="button button-dark" type="button" disabled={!canStart} onClick={onStart}>
-          Start next round
+        <button className="button button-outline" type="button" onClick={onEndGame}>
+          End game
         </button>
       </div>
-      {!canStart && <p className="helper-text">Waiting for all connected players to mark Ready.</p>}
+      <p className="helper-text">
+        Starting another round returns to the lobby; everyone must be ready before it begins.
+      </p>
     </section>
+  )
+}
+
+function RoundHistory({ history }) {
+  if (!history?.length) {
+    return null
+  }
+  return (
+    <details className="round-history">
+      <summary>Review completed rounds ({history.length})</summary>
+      <div className="round-history-list">
+        {[...history].reverse().map((round) => (
+          <section className="round-history-item" key={round.roundNumber}>
+            <h3>Round {round.roundNumber}</h3>
+            <RevealList reveals={round.reveals} />
+          </section>
+        ))}
+      </div>
+    </details>
+  )
+}
+
+function RevealList({ reveals }) {
+  return (
+    <ol className="reveal-list" aria-live="polite">
+      {reveals.map((revealItem, index) => (
+        <li className={`reveal-item reveal-${revealItem.type}`} key={`${index}-${revealItem.playerId}`}>
+          <span className="reveal-index">{String(index + 1).padStart(2, '0')}</span>
+          <div>
+            <span className="reveal-label">
+              {revealItem.type === 'question' ? 'QUESTION' : 'ANSWER'} · {revealItem.nickname}
+            </span>
+            <p>{revealItem.text}</p>
+          </div>
+        </li>
+      ))}
+    </ol>
   )
 }
 

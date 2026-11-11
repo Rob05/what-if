@@ -17,9 +17,10 @@
 
 ## Game Rules
 
-- Before planning, implementing, reviewing, or changing game mechanics, read `docs/what-if-game-rules.md`.
-- For online-mode product decisions and interview context, also read `docs/interviews/online-game-requirements.md`.
+- Before planning, implementing, reviewing, or changing game mechanics, read `docs/requirements/what-if-game-rules.md` and `docs/requirements/online-game-requirements.md`.
 - Treat the documented standard rules and online mode as canonical. Variations are optional and must not silently become defaults.
+- Keep game rules and product requirements under `docs/requirements/`. Whenever gameplay or rules change, update the relevant canonical document(s) in the same change and update relevant tests.
+- Record each completed `/interview` session in its own dated Markdown file under `docs/interviews/` and add it to `docs/interviews/README.md`; consult the index and relevant entries to retain prior decisions and avoid repeating questions. Do not combine interviews into one growing log file.
 
 ## Testing and CI/CD
 

@@ -2,8 +2,11 @@ import {
   RECONNECT_GRACE_MS,
   activePlayers,
   addPlayer,
+  beginNextRound,
+  closeRoom,
   createRoom,
   distributeCards,
+  endGame,
   everyoneReady,
   everyoneSubmitted,
   pauseRound,
@@ -112,8 +115,8 @@ export class Room {
   }
 
   async connect(request) {
-    if (!this.room || this.room.phase === 'expired') {
-      return json({ error: 'This room has expired.' }, 410)
+    if (!this.room || ['expired', 'closed'].includes(this.room.phase)) {
+      return json({ error: this.room?.phase === 'closed' ? 'This room has been closed.' : 'This room has expired.' }, 410)
     }
     if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
       return json({ error: 'A WebSocket connection is required.' }, 426)
@@ -145,8 +148,8 @@ export class Room {
 
   async getState(request) {
     await this.ready
-    if (!this.room || this.room.phase === 'expired') {
-      return json({ error: 'This room has expired.' }, 410)
+    if (!this.room || ['expired', 'closed'].includes(this.room.phase)) {
+      return json({ error: this.room?.phase === 'closed' ? 'This room has been closed.' : 'This room has expired.' }, 410)
     }
 
     const url = new URL(request.url)
@@ -163,8 +166,8 @@ export class Room {
   }
 
   async handleAction(request) {
-    if (!this.room || this.room.phase === 'expired') {
-      return json({ error: 'This room has expired.' }, 410)
+    if (!this.room || ['expired', 'closed'].includes(this.room.phase)) {
+      return json({ error: this.room?.phase === 'closed' ? 'This room has been closed.' : 'This room has expired.' }, 410)
     }
 
     try {
@@ -193,6 +196,15 @@ export class Room {
             break
           case 'start-round':
             startRound(room)
+            break
+          case 'begin-next-round':
+            beginNextRound(room)
+            break
+          case 'end-game':
+            endGame(room)
+            break
+          case 'delete-room':
+            closeRoom(room)
             break
           case 'submit':
             submitCard(room, actor.id, body.question ?? '', body.answer ?? '')
@@ -237,6 +249,11 @@ export class Room {
           state: this.view(this.room, result.player.id),
         }, 201)
       }
+      if (body.action === 'delete-room') {
+        for (const socket of this.ctx.getWebSockets()) {
+          socket.close(1000, 'Room closed.')
+        }
+      }
       if (roomIsExpired(this.room)) {
         await this.expireRoom()
         return json({ expired: true })
@@ -274,6 +291,10 @@ export class Room {
     }
     if (this.room.phase === 'expired') {
       await this.expireRoom()
+      return
+    }
+    if (this.room.phase === 'closed') {
+      await this.ctx.storage.deleteAlarm()
       return
     }
 
@@ -331,8 +352,8 @@ export class Room {
 
   async mutate(operation) {
     return this.enqueue(async () => {
-      if (!this.room || this.room.phase === 'expired') {
-        throw new HttpError('This room has expired.', 410)
+      if (!this.room || ['expired', 'closed'].includes(this.room.phase)) {
+        throw new HttpError(this.room?.phase === 'closed' ? 'This room has been closed.' : 'This room has expired.', 410)
       }
 
       const nextRoom = structuredClone(this.room)
@@ -387,6 +408,8 @@ export class Room {
       id: room.id,
       phase: room.phase,
       roundNumber: room.roundNumber,
+      history: room.history ?? [],
+      gameEnded: room.gameEnded ?? false,
       players: active.map((item) => ({
         id: item.id,
         nickname: item.nickname,
@@ -420,7 +443,7 @@ export class Room {
   }
 
   async scheduleAlarm() {
-    if (!this.room || this.room.phase === 'expired') {
+    if (!this.room || ['expired', 'closed'].includes(this.room.phase)) {
       await this.ctx.storage.deleteAlarm()
       return
     }

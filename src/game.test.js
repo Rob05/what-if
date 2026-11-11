@@ -1,8 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import {
   addPlayer,
+  beginNextRound,
+  closeRoom,
   createRoom,
   distributeCards,
+  endGame,
   everyoneReady,
   everyoneSubmitted,
   pauseRound,
@@ -42,6 +45,16 @@ function submitForEveryone(room, players) {
       `Player ${player.id} would open a bakery.`,
     )
   }
+}
+
+function completeTwoPlayerRound(room, players) {
+  startRound(room)
+  submitForEveryone(room, players)
+  distributeCards(room, () => 0.4)
+  reveal(room, players[0].id, 'question')
+  reveal(room, players[1].id, 'answer')
+  reveal(room, players[1].id, 'question')
+  reveal(room, players[0].id, 'answer')
 }
 
 describe('room setup', () => {
@@ -90,6 +103,39 @@ describe('card distribution and reveal sequence', () => {
     expect(new Set(Object.values(room.assignments)).size).toBe(players.length)
   })
 
+  it('keeps player identities stable while author names follow their randomly assigned cards', () => {
+    const { room, players } = createReadyPlayers(3)
+    const playerIdentities = room.players.map(({ id, nickname }) => ({ id, nickname }))
+    startRound(room)
+    submitForEveryone(room, players)
+    distributeCards(room, () => 0.4)
+
+    expect(room.reveals).toEqual([])
+    for (const player of players) {
+      const card = room.cards.find((item) => item.id === room.assignments[player.id])
+      expect(card.authorNickname).toBe(players.find((author) => author.id === card.authorId).nickname)
+    }
+
+    const reader = players[0]
+    const assignedCard = room.cards.find((card) => card.id === room.assignments[reader.id])
+    reveal(room, reader.id, 'question')
+    reveal(room, players[1].id, 'answer')
+    reveal(room, players[1].id, 'question')
+
+    expect(room.reveals[0]).toMatchObject({
+      playerId: reader.id,
+      nickname: reader.nickname,
+      authorId: assignedCard.authorId,
+      authorNickname: assignedCard.authorNickname,
+    })
+    expect(room.reveals[1].authorNickname).toBe(
+      room.cards.find((card) => card.id === room.assignments[players[1].id]).authorNickname,
+    )
+    expect(room.reveals[2].authorId).toBe(room.reveals[1].authorId)
+    expect(room.reveals[2].authorNickname).toBe(room.reveals[1].authorNickname)
+    expect(room.players.map(({ id, nickname }) => ({ id, nickname }))).toEqual(playerIdentities)
+  })
+
   it('follows question, next player answer and question, ending with the starter answer', () => {
     const { room, players } = createReadyPlayers(3)
     startRound(room)
@@ -112,6 +158,51 @@ describe('card distribution and reveal sequence', () => {
       ['player-1', 'answer'],
     ])
     expect(room.phase).toBe('completed')
+  })
+
+  it('keeps the final reveal visible until another round is selected, then archives the full round', () => {
+    const { room, players } = createReadyPlayers(2)
+    completeTwoPlayerRound(room, players)
+    const finalAnswer = room.reveals.at(-1)
+
+    expect(room.phase).toBe('completed')
+    expect(finalAnswer.type).toBe('answer')
+    expect(room.history).toEqual([])
+
+    beginNextRound(room)
+
+    expect(room.phase).toBe('lobby')
+    expect(room.reveals).toEqual([])
+    expect(room.history).toHaveLength(1)
+    expect(room.history[0].roundNumber).toBe(1)
+    expect(room.history[0].reveals.at(-1)).toEqual(finalAnswer)
+
+    for (const player of players) setPlayerReady(room, player.id, true)
+    startRound(room)
+    expect(room.roundNumber).toBe(2)
+    expect(room.history).toHaveLength(1)
+  })
+
+  it('ends a game into a reviewable lobby and closes a room without clearing its history', () => {
+    const { room, players } = createReadyPlayers(2)
+    completeTwoPlayerRound(room, players)
+    const finalAnswer = room.reveals.at(-1)
+
+    endGame(room)
+
+    expect(room.phase).toBe('lobby')
+    expect(room.gameEnded).toBe(true)
+    expect(room.history).toHaveLength(1)
+    expect(room.history[0].reveals.at(-1)).toEqual(finalAnswer)
+    expect(() => closeRoom(room)).not.toThrow()
+    expect(room.phase).toBe('closed')
+    expect(room.history).toHaveLength(1)
+  })
+
+  it('does not allow closing a room before ending the game', () => {
+    const { room } = createReadyPlayers(2)
+
+    expect(() => closeRoom(room)).toThrow('End the game before closing the room.')
   })
 
   it('removes a leaver’s assigned card while keeping their submitted card in play for its recipient', () => {

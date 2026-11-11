@@ -209,6 +209,17 @@ p {
   background: #fbf8f2;
 }
 
+.button-danger {
+  border-color: #e6c6bd;
+  background: #fff7f4;
+  color: #9c3d25;
+}
+
+.button-danger:hover:not(:disabled) {
+  border-color: #d7a99d;
+  background: #ffede7;
+}
+
 .button-quiet {
   min-height: 38px;
   padding: 0 12px;
@@ -597,6 +608,43 @@ p {
   font-size: 17px;
   font-weight: 650;
   line-height: 1.45;
+}
+
+.round-end-actions {
+  margin-top: 8px;
+}
+
+.round-history {
+  margin: 24px 0;
+  border-top: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+}
+
+.round-history > summary {
+  padding: 14px 0;
+  color: var(--violet);
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.round-history-list {
+  display: grid;
+  gap: 18px;
+  padding-bottom: 18px;
+}
+
+.round-history-item h3 {
+  margin: 0;
+  font-size: 13px;
+}
+
+.round-history-item .reveal-list {
+  margin: 8px 0 0;
+}
+
+.round-history-item .reveal-item {
+  padding: 10px 0;
 }
 
 .reveal-button {

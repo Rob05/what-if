@@ -9,6 +9,8 @@ export function createRoom(roomId, now = Date.now()) {
     lastActivityAt: now,
     phase: 'lobby',
     roundNumber: 0,
+    history: [],
+    gameEnded: false,
     players: [],
     cards: [],
     assignments: {},
@@ -59,7 +61,7 @@ export function activePlayers(room) {
 
 export function setPlayerReady(room, playerId, ready) {
   const player = requireActivePlayer(room, playerId)
-  if (!['lobby', 'completed', 'paused'].includes(room.phase)) {
+  if (!['lobby', 'paused'].includes(room.phase)) {
     throw new Error('Readiness can only be changed between rounds or while paused.')
   }
   player.ready = Boolean(ready)
@@ -72,7 +74,7 @@ export function everyoneReady(room) {
 }
 
 export function startRound(room) {
-  if (!['lobby', 'completed'].includes(room.phase)) {
+  if (room.phase !== 'lobby') {
     throw new Error('A round is already in progress.')
   }
   if (!everyoneReady(room)) {
@@ -80,6 +82,7 @@ export function startRound(room) {
   }
 
   room.phase = 'submitting'
+  room.gameEnded = false
   room.roundNumber += 1
   room.cards = []
   room.assignments = {}
@@ -93,6 +96,33 @@ export function startRound(room) {
   for (const player of activePlayers(room)) {
     player.ready = false
   }
+}
+
+export function beginNextRound(room) {
+  if (room.phase !== 'completed') {
+    throw new Error('The round is not complete.')
+  }
+  archiveCompletedRound(room)
+  resetRound(room)
+  room.phase = 'lobby'
+  room.gameEnded = false
+}
+
+export function endGame(room) {
+  if (room.phase !== 'completed') {
+    throw new Error('The round is not complete.')
+  }
+  archiveCompletedRound(room)
+  resetRound(room)
+  room.phase = 'lobby'
+  room.gameEnded = true
+}
+
+export function closeRoom(room) {
+  if (room.phase !== 'lobby' || !room.gameEnded) {
+    throw new Error('End the game before closing the room.')
+  }
+  room.phase = 'closed'
 }
 
 export function submitCard(room, playerId, question, answer) {
@@ -119,6 +149,7 @@ export function submitCard(room, playerId, question, answer) {
   room.cards.push({
     id: crypto.randomUUID(),
     authorId: player.id,
+    authorNickname: player.nickname,
     question: cleanQuestion,
     answer: cleanAnswer,
   })
@@ -174,6 +205,10 @@ export function reveal(room, playerId, type) {
   if (!card) {
     throw new Error('Your assigned card is no longer in play.')
   }
+  const author = room.players.find((item) => item.id === card.authorId)
+  if (!author) {
+    throw new Error('The author of your assigned card could not be found.')
+  }
   if (!room.starterId) {
     room.starterId = playerId
     room.revealOrder = activePlayers(room).map((activePlayer) => activePlayer.id)
@@ -182,6 +217,8 @@ export function reveal(room, playerId, type) {
   room.reveals.push({
     playerId,
     nickname: player.nickname,
+    authorId: card.authorId,
+    authorNickname: card.authorNickname ?? author.nickname,
     type,
     text: card[type],
   })
@@ -341,6 +378,33 @@ function completeRound(room) {
   room.phase = 'completed'
   room.nextReveal = null
   room.starterId = null
+  room.pausedAt = null
+  for (const player of activePlayers(room)) {
+    player.ready = false
+  }
+}
+
+function archiveCompletedRound(room) {
+  room.history ??= []
+  if (!room.reveals.length || room.history.some((round) => round.roundNumber === room.roundNumber)) {
+    return
+  }
+  room.history.push({
+    roundNumber: room.roundNumber,
+    reveals: room.reveals.map((item) => ({ ...item })),
+    completedAt: Date.now(),
+  })
+}
+
+function resetRound(room) {
+  room.cards = []
+  room.assignments = {}
+  room.revealOrder = []
+  room.starterId = null
+  room.nextReveal = null
+  room.reveals = []
+  room.answeredPlayerIds = []
+  room.questionedPlayerIds = []
   room.pausedAt = null
   for (const player of activePlayers(room)) {
     player.ready = false

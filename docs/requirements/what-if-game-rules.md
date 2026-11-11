@@ -96,12 +96,20 @@ The online version uses the same imaginative, mismatched Question/Answer reveal 
 - Each player submits one hidden card containing both a question and an answer. The question must begin with “What if…”.
 - Each question and answer is limited to 500 characters.
 - Once all active players have submitted, any active player may distribute the cards. Shuffle and assign whole cards so nobody receives their own.
-- The card's author is not identified during play.
 - The starting player reveals the Question on their assigned card.
 - The next player reveals the Answer on their own assigned card, then reveals the Question on that same card. Continue in room order.
 - The starting player's Answer is revealed last, closing the chain. Every active player reveals one Answer to complete the round.
 - Questions and answers are stored together on a card, but the read-aloud pairing is across successive players: one player's Question is followed by the next player's Answer.
-- After a round, players can submit fresh cards for another round.
+- Keep each card's author name attached to it as the card is shuffled and assigned. Hide authorship until the card's first field is revealed, then identify the author alongside each revealed field from that card.
+- Card assignment changes only which card a player reads; it never changes the player's identity, nickname, or browser session.
+- Keep the final revealed Answer and completed reveal sequence visible until an active player chooses the next action.
+
+### Ending and reviewing online games
+
+- After a completed round, any active player can choose to start another round or end the game.
+- Starting another round saves the completed reveal sequence to the room's history and returns players to the lobby. Everyone must be ready before any player can start the next round.
+- Ending the game requires confirmation, saves the completed round, and returns everyone to the lobby. All completed rounds remain available for review, and the room stays open.
+- After ending the game, any active player can confirm closing the room. A closed room no longer accepts joins or player access, but its data remains in the Durable Object store. Closing the room does not erase the stored history.
 
 ### Online departures and reconnection
 
