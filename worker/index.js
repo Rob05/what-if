@@ -1,0 +1,486 @@
+import {
+  RECONNECT_GRACE_MS,
+  activePlayers,
+  addPlayer,
+  createRoom,
+  distributeCards,
+  everyoneReady,
+  everyoneSubmitted,
+  pauseRound,
+  removeExpiredDisconnectedPlayer,
+  removePlayer,
+  resumeRound,
+  reveal,
+  roomIsExpired,
+  setPlayerReady,
+  startRound,
+  submitCard,
+} from '../src/game.js'
+
+const jsonHeaders = { 'content-type': 'application/json; charset=utf-8' }
+
+export default {
+  async fetch(request, env) {
+    const url = new URL(request.url)
+
+    try {
+      if (url.pathname === '/api/rooms' && request.method === 'POST') {
+        const roomId = crypto.randomUUID()
+        const room = env.ROOMS.get(env.ROOMS.idFromName(roomId))
+        const response = await room.fetch('https://room.internal/init', {
+          method: 'POST',
+          headers: jsonHeaders,
+          body: JSON.stringify({ roomId }),
+        })
+        if (!response.ok) {
+          return response
+        }
+        return json({ roomId }, 201)
+      }
+
+      const match = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]{36})(\/connect)?$/i)
+      if (match) {
+        const [, roomId, connectPath] = match
+        if (connectPath && request.method !== 'GET') {
+          return json({ error: 'WebSocket connections must use GET.' }, 405)
+        }
+        if (!connectPath && !['GET', 'POST'].includes(request.method)) {
+          return json({ error: 'Room routes support GET and POST.' }, 405)
+        }
+        const room = env.ROOMS.get(env.ROOMS.idFromName(roomId))
+        const target = new URL(
+          connectPath ? '/connect' : request.method === 'GET' ? '/state' : '/action',
+          'https://room.internal',
+        )
+        target.search = url.search
+        return room.fetch(new Request(target, request))
+      }
+
+      if (url.pathname.startsWith('/api/')) {
+        return json({ error: 'API route not found.' }, 404)
+      }
+
+      return env.ASSETS.fetch(request)
+    } catch (error) {
+      console.error('Request failed', error)
+      return json(
+        { error: error instanceof Error ? error.message : 'Unexpected server error.' },
+        error instanceof HttpError ? error.status : 500,
+      )
+    }
+  },
+}
+
+export class Room {
+  constructor(ctx, env) {
+    this.ctx = ctx
+    this.env = env
+    this.room = null
+    this.queue = Promise.resolve()
+    this.ready = ctx.blockConcurrencyWhile(async () => {
+      this.room = await ctx.storage.get('room') ?? null
+    })
+  }
+
+  async fetch(request) {
+    await this.ready
+    const url = new URL(request.url)
+
+    if (url.pathname === '/init' && request.method === 'POST') {
+      return this.initialize(request)
+    }
+    if (url.pathname === '/connect' && request.method === 'GET') {
+      return this.connect(request)
+    }
+    if (url.pathname === '/state' && request.method === 'GET') {
+      return this.getState(request)
+    }
+    if (url.pathname === '/action' && request.method === 'POST') {
+      return this.handleAction(request)
+    }
+    return json({ error: 'Room route not found.' }, 404)
+  }
+
+  async initialize(request) {
+    if (this.room) {
+      return json({ error: 'Room already exists.' }, 409)
+    }
+    const { roomId } = await readJson(request)
+    this.room = createRoom(roomId)
+    await this.ctx.storage.put('room', this.room)
+    return json({ roomId }, 201)
+  }
+
+  async connect(request) {
+    if (!this.room || this.room.phase === 'expired') {
+      return json({ error: 'This room has expired.' }, 410)
+    }
+    if (request.headers.get('Upgrade')?.toLowerCase() !== 'websocket') {
+      return json({ error: 'A WebSocket connection is required.' }, 426)
+    }
+
+    const url = new URL(request.url)
+    const playerId = url.searchParams.get('playerId')
+    const token = url.searchParams.get('token')
+    const player = this.findPlayer(this.room, playerId, token)
+    if (!player) {
+      return json({ error: 'Player session is not valid for this room.' }, 401)
+    }
+
+    const pair = new WebSocketPair()
+    const [client, server] = Object.values(pair)
+    const connectionId = crypto.randomUUID()
+    this.ctx.acceptWebSocket(server, [playerId])
+    server.serializeAttachment({ playerId, connectionId })
+
+    await this.mutate((room) => {
+      const currentPlayer = this.findPlayer(room, playerId, token)
+      currentPlayer.connected = true
+      currentPlayer.connectionId = connectionId
+      currentPlayer.disconnectedAt = null
+    })
+    await this.scheduleAlarm()
+    return new Response(null, { status: 101, webSocket: client })
+  }
+
+  async getState(request) {
+    await this.ready
+    if (!this.room || this.room.phase === 'expired') {
+      return json({ error: 'This room has expired.' }, 410)
+    }
+
+    const url = new URL(request.url)
+    const playerId = url.searchParams.get('playerId')
+    const token = url.searchParams.get('token')
+    let player = null
+    if (playerId || token) {
+      player = this.findPlayer(this.room, playerId, token)
+      if (!player) {
+        return json({ error: 'Player session is not valid for this room.' }, 401)
+      }
+    }
+    return json({ state: this.view(this.room, player?.id) })
+  }
+
+  async handleAction(request) {
+    if (!this.room || this.room.phase === 'expired') {
+      return json({ error: 'This room has expired.' }, 410)
+    }
+
+    try {
+      const body = await readJson(request)
+      const result = await this.mutate((room) => {
+        if (body.action === 'join') {
+          const player = {
+            id: crypto.randomUUID(),
+            token: crypto.randomUUID(),
+          }
+          addPlayer(room, {
+            ...player,
+            nickname: body.nickname ?? '',
+          })
+          return { player }
+        }
+
+        const actor = this.findPlayer(room, body.playerId, body.token)
+        if (!actor) {
+          throw new HttpError('Player session is not valid for this room.', 401)
+        }
+
+        switch (body.action) {
+          case 'ready':
+            setPlayerReady(room, actor.id, body.ready)
+            break
+          case 'start-round':
+            startRound(room)
+            break
+          case 'submit':
+            submitCard(room, actor.id, body.question ?? '', body.answer ?? '')
+            break
+          case 'distribute':
+            distributeCards(room)
+            break
+          case 'reveal':
+            reveal(room, actor.id, body.type)
+            break
+          case 'remove-player': {
+            const target = room.players.find((player) => player.id === body.targetPlayerId)
+            if (!target || target.removed) {
+              throw new HttpError('That player is no longer in this room.', 404)
+            }
+            if (target.connected) {
+              throw new HttpError('Only a disconnected player can be removed this way.', 409)
+            }
+            removeExpiredDisconnectedPlayer(room, target.id)
+            break
+          }
+          case 'resume':
+            resumeRound(room)
+            break
+          case 'leave':
+            removePlayer(room, actor.id)
+            break
+          default:
+            throw new HttpError('Unknown room action.', 400)
+        }
+
+        return null
+      })
+
+      if (body.action === 'join') {
+        await this.scheduleAlarm()
+        return json({
+          player: {
+            playerId: result.player.id,
+            token: result.player.token,
+          },
+          state: this.view(this.room, result.player.id),
+        }, 201)
+      }
+      if (roomIsExpired(this.room)) {
+        await this.expireRoom()
+        return json({ expired: true })
+      }
+      await this.scheduleAlarm()
+      return json({ state: this.view(this.room, body.playerId) })
+    } catch (error) {
+      return json(
+        { error: error instanceof Error ? error.message : 'Unable to update the room.' },
+        error instanceof HttpError ? error.status : 400,
+      )
+    }
+  }
+
+  async webSocketMessage(socket, message) {
+    if (message !== 'ping') {
+      socket.close(1008, 'Unsupported message.')
+      return
+    }
+    socket.send('pong')
+  }
+
+  async webSocketClose(socket) {
+    await this.markDisconnected(socket)
+  }
+
+  async webSocketError(socket) {
+    await this.markDisconnected(socket)
+  }
+
+  async alarm() {
+    await this.ready
+    if (!this.room) {
+      return
+    }
+    if (this.room.phase === 'expired') {
+      await this.expireRoom()
+      return
+    }
+
+    await this.mutate((room) => {
+      const players = activePlayers(room)
+      const now = Date.now()
+      const noneConnected = players.length > 0 && players.every((player) => !player.connected)
+      if (noneConnected && players.every(
+        (player) => player.disconnectedAt && now - player.disconnectedAt >= RECONNECT_GRACE_MS,
+      )) {
+        room.phase = 'expired'
+        return
+      }
+
+      const timedOut = players.some(
+        (player) => !player.connected
+          && player.disconnectedAt
+          && now - player.disconnectedAt >= RECONNECT_GRACE_MS,
+      )
+      if (timedOut && room.phase === 'revealing') {
+        pauseRound(room, now)
+      }
+    })
+
+    if (this.room?.phase === 'expired' || !this.room) {
+      await this.expireRoom()
+      return
+    }
+    await this.scheduleAlarm()
+  }
+
+  async markDisconnected(socket) {
+    const attachment = socket.deserializeAttachment()
+    if (!attachment?.playerId) {
+      return
+    }
+
+    try {
+      await this.mutate((room) => {
+        const player = room.players.find((item) => item.id === attachment.playerId)
+        if (!player || player.removed || player.connectionId !== attachment.connectionId) {
+          return
+        }
+        player.connected = false
+        player.connectionId = null
+        player.disconnectedAt = Date.now()
+      })
+    } catch (error) {
+      if (!(error instanceof HttpError && error.status === 410)) {
+        throw error
+      }
+    }
+    await this.scheduleAlarm()
+  }
+
+  async mutate(operation) {
+    return this.enqueue(async () => {
+      if (!this.room || this.room.phase === 'expired') {
+        throw new HttpError('This room has expired.', 410)
+      }
+
+      const nextRoom = structuredClone(this.room)
+      const result = operation(nextRoom)
+      nextRoom.lastActivityAt = Date.now()
+      await this.ctx.storage.put('room', nextRoom)
+      this.room = nextRoom
+      await this.broadcast()
+      return result
+    })
+  }
+
+  async enqueue(operation) {
+    const task = this.queue.then(operation)
+    this.queue = task.then(() => undefined, () => undefined)
+    return task
+  }
+
+  async broadcast() {
+    if (!this.room) {
+      return
+    }
+    const sockets = this.ctx.getWebSockets()
+    for (const socket of sockets) {
+      const attachment = socket.deserializeAttachment()
+      const playerId = attachment?.playerId
+      if (!playerId) {
+        continue
+      }
+      try {
+        socket.send(JSON.stringify({
+          type: 'state',
+          state: this.view(this.room, playerId),
+        }))
+      } catch (error) {
+        console.warn('Unable to broadcast room state to a player.', error)
+        socket.close(1011, 'Unable to receive room updates.')
+      }
+    }
+  }
+
+  view(room, playerId) {
+    const active = activePlayers(room)
+    const assignedCardId = playerId ? room.assignments[playerId] : null
+    const assignedCard = assignedCardId
+      ? room.cards.find((card) => card.id === assignedCardId)
+      : null
+    const player = playerId ? room.players.find((item) => item.id === playerId) : null
+    const submittedIds = new Set(room.cards.map((card) => card.authorId))
+
+    return {
+      id: room.id,
+      phase: room.phase,
+      roundNumber: room.roundNumber,
+      players: active.map((item) => ({
+        id: item.id,
+        nickname: item.nickname,
+        ready: item.ready,
+        connected: item.connected,
+        disconnectedAt: item.disconnectedAt,
+        submitted: room.phase === 'submitting' && submittedIds.has(item.id),
+      })),
+      allReady: everyoneReady(room),
+      allSubmitted: room.phase === 'submitting' && everyoneSubmitted(room),
+      nextReveal: room.nextReveal,
+      starterId: room.starterId,
+      reveals: room.reveals,
+      pausedAt: room.pausedAt,
+      myPlayerId: player?.id ?? null,
+      myCard: assignedCard ? {
+        question: assignedCard.question,
+        answer: assignedCard.answer,
+      } : null,
+      hasSubmitted: player ? room.phase === 'submitting' && submittedIds.has(player.id) : false,
+    }
+  }
+
+  findPlayer(room, playerId, token) {
+    if (!playerId || !token) {
+      return null
+    }
+    return room.players.find(
+      (player) => player.id === playerId && player.token === token && !player.removed,
+    ) ?? null
+  }
+
+  async scheduleAlarm() {
+    if (!this.room || this.room.phase === 'expired') {
+      await this.ctx.storage.deleteAlarm()
+      return
+    }
+    const active = activePlayers(this.room)
+    const disconnected = active.filter((player) => !player.connected && player.disconnectedAt)
+    if (!disconnected.length) {
+      await this.ctx.storage.deleteAlarm()
+      return
+    }
+    const allDisconnected = active.length > 0 && active.every((player) => !player.connected)
+    if (allDisconnected) {
+      const roomExpiry = Math.max(
+        ...disconnected.map((player) => player.disconnectedAt + RECONNECT_GRACE_MS),
+      )
+      await this.ctx.storage.setAlarm(Math.max(Date.now() + 1, roomExpiry))
+      return
+    }
+    if (this.room.phase !== 'revealing') {
+      await this.ctx.storage.deleteAlarm()
+      return
+    }
+
+    const pendingDeadlines = disconnected
+      .map((player) => player.disconnectedAt + RECONNECT_GRACE_MS)
+      .filter((deadline) => deadline > Date.now())
+    if (!pendingDeadlines.length) {
+      await this.ctx.storage.deleteAlarm()
+      return
+    }
+    const deadline = Math.min(...pendingDeadlines)
+    await this.ctx.storage.setAlarm(Math.max(Date.now() + 1, deadline))
+  }
+
+  async expireRoom() {
+    for (const socket of this.ctx.getWebSockets()) {
+      socket.close(1000, 'Room expired.')
+    }
+    await this.ctx.storage.deleteAll()
+    this.room = null
+  }
+}
+
+async function readJson(request) {
+  try {
+    return await request.json()
+  } catch {
+    throw new HttpError('Request body must be valid JSON.', 400)
+  }
+}
+
+function json(data, status = 200) {
+  return new Response(JSON.stringify(data), {
+    status,
+    headers: jsonHeaders,
+  })
+}
+
+class HttpError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.status = status
+  }
+}
