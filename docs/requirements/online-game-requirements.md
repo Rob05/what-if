@@ -5,6 +5,8 @@ This document records the product decisions gathered before implementation. The 
 ## Rooms and players
 
 - The game supports multiple independent rooms, each with its own QR join code/link.
+- The landing page lists occupied, open rooms and shows a lock for private rooms. Closed and empty rooms are not listed. Players can join a listed room only between rounds; a room in progress remains visible but cannot be joined until it is in the lobby or between rounds.
+- A room can be created as public or private. A private room has a user-defined access code of at least five characters, separate from its room ID and invitation link. The landing page shows private rooms as locked; joining one requires the correct code, which is validated by the server and never included in public room listings or state.
 - A room can have one or more occupants, but a round requires at least two active players.
 - Players join as guests using a nickname; accounts are not required.
 - Nicknames are unique within a room and limited to 24 characters.

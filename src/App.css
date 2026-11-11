@@ -131,6 +131,50 @@ p {
   line-height: 1.6;
 }
 
+.private-room-option {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  margin: -4px 0 14px;
+  color: var(--ink);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+.private-room-option input {
+  width: 16px;
+  height: 16px;
+  margin: 0;
+  accent-color: var(--violet);
+}
+
+.private-code-field {
+  display: grid;
+  gap: 7px;
+  margin-bottom: 14px;
+  color: var(--muted);
+  font-size: 12px;
+  font-weight: 650;
+}
+
+.private-code-field input {
+  width: 100%;
+  height: 42px;
+  padding: 0 12px;
+  border: 1px solid var(--line);
+  border-radius: 11px;
+  background: #fffefa;
+  color: var(--ink);
+  font: inherit;
+  font-size: 14px;
+}
+
+.private-code-field input:focus {
+  border-color: var(--violet);
+  outline: none;
+  box-shadow: 0 0 0 3px rgba(102, 79, 205, 0.12);
+}
+
 .action-icon {
   display: grid;
   width: 38px;
@@ -921,6 +965,83 @@ p {
     gap: 12px;
   }
 
+  .room-directory {
+    max-width: 900px;
+    padding-bottom: 48px;
+  }
+
+  .room-directory-heading {
+    display: flex;
+    align-items: end;
+    justify-content: space-between;
+    gap: 16px;
+    margin-bottom: 16px;
+  }
+
+  .room-directory-heading .eyebrow {
+    margin-bottom: 5px;
+    color: var(--violet);
+  }
+
+  .room-directory-heading h2 {
+    margin-bottom: 0;
+    font-family: var(--display);
+    font-size: 30px;
+    letter-spacing: -1px;
+  }
+
+  .room-directory-heading > span {
+    padding-bottom: 4px;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .room-directory-empty {
+    margin: 0;
+    padding: 20px;
+    border: 1px dashed #d9d2c5;
+    border-radius: 16px;
+    color: var(--muted);
+    font-size: 14px;
+    text-align: center;
+  }
+
+  .room-directory-grid {
+    display: grid;
+    gap: 10px;
+  }
+
+  .room-directory-card {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 16px;
+    padding: 15px 17px;
+    border: 1px solid var(--line);
+    border-radius: 16px;
+    background: var(--paper);
+  }
+
+  .room-directory-info h3 {
+    display: flex;
+    align-items: center;
+    gap: 7px;
+    margin: 0 0 5px;
+    font-size: 15px;
+    font-weight: 750;
+  }
+
+  .room-directory-info p {
+    margin: 0;
+    color: var(--muted);
+    font-size: 12px;
+  }
+
+  .room-lock {
+    font-family: 'Segoe UI Symbol', sans-serif;
+    font-size: 14px;
+  }
+
   .action-card {
     min-height: auto;
     padding: 21px;
@@ -928,6 +1049,10 @@ p {
 
   .action-card p {
     min-height: auto;
+  }
+
+  .room-directory-card {
+    align-items: flex-start;
   }
 
   .room-topbar {

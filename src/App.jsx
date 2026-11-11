@@ -27,14 +27,61 @@ function App() {
 
 function HomePage({ onRoomCreated }) {
   const [roomCode, setRoomCode] = useState('')
+  const [rooms, setRooms] = useState([])
+  const [isPrivate, setIsPrivate] = useState(false)
+  const [accessCode, setAccessCode] = useState('')
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState('')
+  const [roomListError, setRoomListError] = useState('')
+
+  useEffect(() => {
+    let active = true
+    let requestInProgress = false
+
+    async function refreshRooms() {
+      if (requestInProgress) {
+        return
+      }
+      requestInProgress = true
+      try {
+        const response = await fetch('/api/rooms')
+        const payload = await readResponse(response)
+        if (active) {
+          setRooms(payload.rooms)
+          setRoomListError('')
+        }
+      } catch (requestError) {
+        if (active) {
+          setRoomListError(requestError.message)
+        }
+      } finally {
+        requestInProgress = false
+      }
+    }
+
+    refreshRooms()
+    const timer = window.setInterval(refreshRooms, 5000)
+    return () => {
+      active = false
+      window.clearInterval(timer)
+    }
+  }, [])
 
   async function createRoom() {
+    const cleanAccessCode = accessCode.trim()
+    if (isPrivate && [...cleanAccessCode].length < 5) {
+      setError('Private room codes must be at least 5 characters.')
+      return
+    }
+
     setBusy(true)
     setError('')
     try {
-      const response = await fetch('/api/rooms', { method: 'POST' })
+      const response = await fetch('/api/rooms', {
+        method: 'POST',
+        headers: { 'content-type': 'application/json' },
+        body: JSON.stringify({ isPrivate, accessCode: cleanAccessCode }),
+      })
       const payload = await readResponse(response)
       onRoomCreated(payload.roomId)
     } catch (requestError) {
@@ -80,6 +127,27 @@ function HomePage({ onRoomCreated }) {
           <div className="action-icon" aria-hidden="true">✳</div>
           <h2>Start a new room</h2>
           <p>Make a room and invite everyone with its QR code.</p>
+          <label className="private-room-option">
+            <input
+              type="checkbox"
+              checked={isPrivate}
+              onChange={(event) => setIsPrivate(event.target.checked)}
+            />
+            Make this room private
+          </label>
+          {isPrivate && (
+            <label className="private-code-field">
+              Access code (at least 5 characters)
+              <input
+                type="password"
+                autoComplete="new-password"
+                value={accessCode}
+                onChange={(event) => setAccessCode(event.target.value)}
+                minLength={5}
+                required
+              />
+            </label>
+          )}
           <button className="button button-primary" type="button" onClick={createRoom} disabled={busy}>
             {busy ? 'Creating room…' : 'Create a room'}
           </button>
@@ -103,6 +171,45 @@ function HomePage({ onRoomCreated }) {
         </div>
       </section>
 
+      <section className="room-directory" aria-labelledby="room-directory-title">
+        <div className="room-directory-heading">
+          <div>
+            <p className="eyebrow">Come play</p>
+            <h2 id="room-directory-title">Active rooms</h2>
+          </div>
+          <span>{rooms.length} {rooms.length === 1 ? 'room' : 'rooms'}</span>
+        </div>
+        {roomListError && <p className="error-banner" role="alert">{roomListError}</p>}
+        {rooms.length === 0 ? (
+          <p className="room-directory-empty">No active rooms yet. Start one and invite your friends.</p>
+        ) : (
+          <div className="room-directory-grid">
+            {rooms.map((room) => {
+              const canJoin = ['lobby', 'completed'].includes(room.phase)
+              return (
+                <article className="room-directory-card" key={room.roomId}>
+                  <div className="room-directory-info">
+                    <h3>
+                      Room {shortRoomId(room.roomId)}
+                      {room.isPrivate && <span className="room-lock" aria-label="Private room">🔒</span>}
+                    </h3>
+                    <p>{room.playerCount} {room.playerCount === 1 ? 'player' : 'players'} · {phaseLabel(room.phase)}</p>
+                  </div>
+                  <button
+                    className="button button-outline button-small"
+                    type="button"
+                    disabled={!canJoin}
+                    onClick={() => onRoomCreated(room.roomId)}
+                  >
+                    {canJoin ? 'Join room' : 'In progress'}
+                  </button>
+                </article>
+              )
+            })}
+          </div>
+        )}
+      </section>
+
       {error && <p className="error-banner" role="alert">{error}</p>}
 
       <footer className="home-footer">
@@ -119,6 +226,7 @@ function HomePage({ onRoomCreated }) {
 function RoomPage({ roomId, onLeave }) {
   const [credentials, setCredentials] = useState(() => readCredentials(roomId))
   const [nickname, setNickname] = useState('')
+  const [roomAccessCode, setRoomAccessCode] = useState('')
   const [room, setRoom] = useState(null)
   const [loading, setLoading] = useState(true)
   const [error, setError] = useState('')
@@ -265,6 +373,9 @@ function RoomPage({ roomId, onLeave }) {
       if (payload.state) {
         setRoom(payload.state)
       }
+      if (payload.warning) {
+        setError(payload.warning)
+      }
       if (action === 'delete-room') {
         window.localStorage.removeItem(`${SESSION_PREFIX}${roomId}`)
         socketRef.current?.close()
@@ -335,7 +446,7 @@ function RoomPage({ roomId, onLeave }) {
             className="nickname-form"
             onSubmit={(event) => {
               event.preventDefault()
-              act('join', { nickname })
+              act('join', { nickname, accessCode: roomAccessCode })
             }}
           >
             <label htmlFor="nickname">Your nickname</label>
@@ -348,6 +459,19 @@ function RoomPage({ roomId, onLeave }) {
               placeholder="e.g. Captain Maybe"
               required
             />
+            {room.isPrivate && (
+              <>
+                <label htmlFor="private-room-code">Room access code</label>
+                <input
+                  id="private-room-code"
+                  type="password"
+                  autoComplete="current-password"
+                  value={roomAccessCode}
+                  onChange={(event) => setRoomAccessCode(event.target.value)}
+                  required
+                />
+              </>
+            )}
             <button className="button button-primary" type="submit">Join room</button>
           </form>
           {error && <p className="error-banner" role="alert">{error}</p>}

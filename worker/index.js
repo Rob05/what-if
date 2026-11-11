@@ -27,13 +27,32 @@ export default {
     const url = new URL(request.url)
 
     try {
+      if (url.pathname === '/api/rooms' && request.method === 'GET') {
+        const directory = env.ROOM_DIRECTORY.get(env.ROOM_DIRECTORY.idFromName('active-rooms'))
+        return directory.fetch('https://directory.internal/rooms')
+      }
+
       if (url.pathname === '/api/rooms' && request.method === 'POST') {
+        const hasJsonBody = request.headers.get('content-type')?.includes('application/json')
+        const body = hasJsonBody ? await readJson(request) : {}
+        if (!body || typeof body !== 'object' || Array.isArray(body)) {
+          throw new HttpError('Request body must be a JSON object.', 400)
+        }
+        if (body.isPrivate !== undefined && typeof body.isPrivate !== 'boolean') {
+          throw new HttpError('Private room selection must be true or false.', 400)
+        }
+        const isPrivate = body.isPrivate === true
+        const accessCode = isPrivate ? normalizeAccessCode(body.accessCode) : null
+        if (isPrivate && (!accessCode || [...accessCode].length < 5)) {
+          throw new HttpError('Private room codes must be at least 5 characters.', 400)
+        }
+
         const roomId = crypto.randomUUID()
         const room = env.ROOMS.get(env.ROOMS.idFromName(roomId))
         const response = await room.fetch('https://room.internal/init', {
           method: 'POST',
           headers: jsonHeaders,
-          body: JSON.stringify({ roomId }),
+          body: JSON.stringify({ roomId, accessCode }),
         })
         if (!response.ok) {
           return response
@@ -104,12 +123,48 @@ export class Room {
     return json({ error: 'Room route not found.' }, 404)
   }
 
+  async syncDirectory() {
+    if (!this.room) {
+      return
+    }
+    if (['closed', 'expired'].includes(this.room.phase) || activePlayers(this.room).length === 0) {
+      await this.removeFromDirectory(this.room.id)
+      return
+    }
+    const directory = this.env.ROOM_DIRECTORY.get(this.env.ROOM_DIRECTORY.idFromName('active-rooms'))
+    const response = await directory.fetch('https://directory.internal/rooms', {
+      method: 'PUT',
+      headers: jsonHeaders,
+      body: JSON.stringify({
+        roomId: this.room.id,
+        isPrivate: Boolean(this.room.accessCode),
+        phase: this.room.phase,
+        playerCount: activePlayers(this.room).length,
+        createdAt: this.room.createdAt,
+      }),
+    })
+    if (!response.ok) {
+      throw new Error(`Could not update the active-room directory (${response.status}).`)
+    }
+  }
+
+  async removeFromDirectory(roomId) {
+    const directory = this.env.ROOM_DIRECTORY.get(this.env.ROOM_DIRECTORY.idFromName('active-rooms'))
+    const response = await directory.fetch(`https://directory.internal/rooms/${roomId}`, {
+      method: 'DELETE',
+    })
+    if (!response.ok) {
+      throw new Error(`Could not remove the room from the active-room directory (${response.status}).`)
+    }
+  }
+
   async initialize(request) {
     if (this.room) {
       return json({ error: 'Room already exists.' }, 409)
     }
-    const { roomId } = await readJson(request)
+    const { roomId, accessCode = null } = await readJson(request)
     this.room = createRoom(roomId)
+    this.room.accessCode = accessCode
     await this.ctx.storage.put('room', this.room)
     return json({ roomId }, 201)
   }
@@ -172,8 +227,11 @@ export class Room {
 
     try {
       const body = await readJson(request)
-      const result = await this.mutate((room) => {
+      const { value: result, directoryWarning } = await this.mutate((room) => {
         if (body.action === 'join') {
+          if (room.accessCode && normalizeAccessCode(body.accessCode) !== room.accessCode) {
+            throw new HttpError('The private room code is incorrect.', 403)
+          }
           const player = {
             id: crypto.randomUUID(),
             token: crypto.randomUUID(),
@@ -247,6 +305,7 @@ export class Room {
             token: result.player.token,
           },
           state: this.view(this.room, result.player.id),
+          ...(directoryWarning ? { warning: directoryWarning } : {}),
         }, 201)
       }
       if (body.action === 'delete-room') {
@@ -255,11 +314,19 @@ export class Room {
         }
       }
       if (roomIsExpired(this.room)) {
-        await this.expireRoom()
-        return json({ expired: true })
+        const expiryWarning = await this.expireRoom()
+        return json({
+          expired: true,
+          ...((directoryWarning || expiryWarning)
+            ? { warning: directoryWarning ?? expiryWarning }
+            : {}),
+        })
       }
       await this.scheduleAlarm()
-      return json({ state: this.view(this.room, body.playerId) })
+      return json({
+        state: this.view(this.room, body.playerId),
+        ...(directoryWarning ? { warning: directoryWarning } : {}),
+      })
     } catch (error) {
       return json(
         { error: error instanceof Error ? error.message : 'Unable to update the room.' },
@@ -361,8 +428,17 @@ export class Room {
       nextRoom.lastActivityAt = Date.now()
       await this.ctx.storage.put('room', nextRoom)
       this.room = nextRoom
+      let directoryWarning
+      try {
+        await this.syncDirectory()
+      } catch (error) {
+        console.error('Room state changed, but the active-room directory could not be updated.', error)
+        directoryWarning = error instanceof Error
+          ? error.message
+          : 'The active-room directory could not be updated.'
+      }
       await this.broadcast()
-      return result
+      return { value: result, directoryWarning }
     })
   }
 
@@ -396,6 +472,15 @@ export class Room {
   }
 
   view(room, playerId) {
+    if (room.accessCode && !playerId) {
+      return {
+        id: room.id,
+        phase: room.phase,
+        isPrivate: true,
+        players: [],
+      }
+    }
+
     const active = activePlayers(room)
     const assignedCardId = playerId ? room.assignments[playerId] : null
     const assignedCard = assignedCardId
@@ -406,6 +491,7 @@ export class Room {
 
     return {
       id: room.id,
+      isPrivate: Boolean(room.accessCode),
       phase: room.phase,
       roundNumber: room.roundNumber,
       history: room.history ?? [],
@@ -478,12 +564,97 @@ export class Room {
   }
 
   async expireRoom() {
+    const roomId = this.room?.id
+    let directoryWarning
+    if (roomId) {
+      try {
+        await this.removeFromDirectory(roomId)
+      } catch (error) {
+        console.error('Room expired, but its active-room listing could not be removed.', error)
+        directoryWarning = error instanceof Error
+          ? error.message
+          : 'The active-room listing could not be removed.'
+      }
+    }
     for (const socket of this.ctx.getWebSockets()) {
       socket.close(1000, 'Room expired.')
     }
     await this.ctx.storage.deleteAll()
     this.room = null
+    return directoryWarning
   }
+}
+
+export class RoomDirectory {
+  constructor(ctx) {
+    this.ctx = ctx
+    this.rooms = {}
+    this.queue = Promise.resolve()
+    this.ready = ctx.blockConcurrencyWhile(async () => {
+      this.rooms = await ctx.storage.get('rooms') ?? {}
+    })
+  }
+
+  async fetch(request) {
+    await this.ready
+    const url = new URL(request.url)
+    if (url.pathname === '/rooms' && request.method === 'GET') {
+      return this.list()
+    }
+    if (url.pathname === '/rooms' && request.method === 'PUT') {
+      return this.update(request)
+    }
+    const match = url.pathname.match(/^\/rooms\/([0-9a-f-]{36})$/i)
+    if (match && request.method === 'DELETE') {
+      return this.remove(match[1])
+    }
+    return json({ error: 'Room directory route not found.' }, 404)
+  }
+
+  async list() {
+    return this.enqueue(async () => {
+      const rooms = Object.values(this.rooms)
+        .filter((room) => room.playerCount > 0 && !['closed', 'expired'].includes(room.phase))
+        .sort((left, right) => right.createdAt - left.createdAt)
+      return json({ rooms })
+    })
+  }
+
+  async update(request) {
+    const room = await readJson(request)
+    if (!room.roomId || !room.phase || !Number.isInteger(room.playerCount)) {
+      return json({ error: 'Room listing data is invalid.' }, 400)
+    }
+    await this.enqueue(async () => {
+      this.rooms[room.roomId] = {
+        roomId: room.roomId,
+        isPrivate: Boolean(room.isPrivate),
+        phase: room.phase,
+        playerCount: room.playerCount,
+        createdAt: room.createdAt,
+      }
+      await this.ctx.storage.put('rooms', this.rooms)
+    })
+    return json({ ok: true })
+  }
+
+  async remove(roomId) {
+    await this.enqueue(async () => {
+      delete this.rooms[roomId]
+      await this.ctx.storage.put('rooms', this.rooms)
+    })
+    return json({ ok: true })
+  }
+
+  async enqueue(operation) {
+    const task = this.queue.then(operation)
+    this.queue = task.then(() => undefined, () => undefined)
+    return task
+  }
+}
+
+function normalizeAccessCode(value) {
+  return typeof value === 'string' ? value.trim() : ''
 }
 
 async function readJson(request) {
