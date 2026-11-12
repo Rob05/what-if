@@ -7,6 +7,7 @@ import {
   pairRevealsBySequence,
   RECONNECT_GRACE_MS,
 } from './game.js'
+import { getRevealCardField } from './reveal-view.js'
 import './App.css'
 
 const SESSION_PREFIX = 'what-if-room:'
@@ -547,8 +548,6 @@ function RoomPage({ roomId, onLeave }) {
   const nextIsQuestion = room.phase === 'revealing' && !room.nextReveal
   const canStartRound = room.phase === 'lobby' && allReady
   const canResume = room.phase === 'paused' && pausedReady
-  const canDistribute = room.phase === 'submitting'
-    && room.allSubmitted
 
   return (
     <main className="room-shell">
@@ -609,14 +608,13 @@ function RoomPage({ roomId, onLeave }) {
               room={room}
               me={myPlayer}
               onSubmit={(question, answer) => act('submit', { question, answer })}
-              onDistribute={() => act('distribute')}
-              canDistribute={canDistribute}
             />
           )}
 
           {room.phase === 'revealing' && (
             <RevealPanel
               room={room}
+              myPlayerId={myPlayer.id}
               myTurn={myTurn}
               nextIsQuestion={nextIsQuestion}
               onReveal={(type) => act('reveal', { type })}
@@ -694,7 +692,7 @@ function LobbyPanel({ room, me, onReady, onStart, onDelete, canStart }) {
   )
 }
 
-function SubmissionPanel({ room, me, onSubmit, onDistribute, canDistribute }) {
+function SubmissionPanel({ room, me, onSubmit }) {
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -702,129 +700,232 @@ function SubmissionPanel({ room, me, onSubmit, onDistribute, canDistribute }) {
   if (me.submitted) {
     return (
       <section className="stage-card">
-        <span className="stage-number">02 / WRITE A CARD</span>
-        <h2>Your card is in the basket.</h2>
-        <p className="stage-copy">
-          {room.allSubmitted
-            ? 'Everyone has submitted. Any player can shuffle and distribute the cards.'
-            : 'Your Question and Answer are hidden from the room until they are revealed.'}
-        </p>
-        <div className="waiting-row">
-          <span className="waiting-spinner" aria-hidden="true" />
-          <span>{room.players.filter((player) => player.submitted).length} of {room.players.length} cards submitted</span>
+        <RoundTabs activeTab="card" tabs={[{ id: 'card', label: 'Your card' }]} />
+        <div id="round-card-panel" role="tabpanel" aria-labelledby="round-card-tab">
+          <span className="stage-number">02 / WRITE A CARD</span>
+          <h2>Your card is in the basket.</h2>
+          <p className="stage-copy">
+            {room.allSubmitted
+              ? 'Everyone has submitted. The cards are being shuffled and dealt.'
+              : 'Your Question and Answer are hidden from the room until they are revealed.'}
+          </p>
+          <div className="waiting-row">
+            <span className="waiting-spinner" aria-hidden="true" />
+            <span>{room.players.filter((player) => player.submitted).length} of {room.players.length} cards submitted</span>
+          </div>
         </div>
-        {canDistribute && (
-          <button className="button button-primary" type="button" onClick={onDistribute}>
-            Shuffle and distribute cards
-          </button>
-        )}
       </section>
     )
   }
 
   return (
     <section className="stage-card">
-      <span className="stage-number">02 / WRITE A CARD</span>
-      <h2>What if… you wrote the next surprise?</h2>
-      <p className="stage-copy">Write both parts on one card. Keep it short, and keep it kind.</p>
-      <form
-        className="card-form"
-        onSubmit={async (event) => {
-          event.preventDefault()
-          setSubmitting(true)
-          const cleanQuestion = question.trim()
-          const fullQuestion = /^what if(?:\s|[.!?…]|$)/i.test(cleanQuestion)
-            ? cleanQuestion
-            : `What if ${cleanQuestion}`
-          await onSubmit(fullQuestion, answer)
-          setSubmitting(false)
-        }}
-      >
-        <label htmlFor="question">Question</label>
-        <div className="input-prefix">
-          <span aria-hidden="true">What if</span>
-          <input
-            id="question"
-            maxLength={MAX_FIELD_LENGTH - 8}
-            value={question}
-            onChange={(event) => setQuestion(event.target.value.replace(/^what if\s*/i, ''))}
-            placeholder="animals could talk?"
+      <RoundTabs activeTab="card" tabs={[{ id: 'card', label: 'Your card' }]} />
+      <div id="round-card-panel" role="tabpanel" aria-labelledby="round-card-tab">
+        <span className="stage-number">02 / WRITE A CARD</span>
+        <h2>What if… you wrote the next surprise?</h2>
+        <p className="stage-copy">Write both parts on one card. Keep it short, and keep it kind.</p>
+        <form
+          className="card-form"
+          onSubmit={async (event) => {
+            event.preventDefault()
+            setSubmitting(true)
+            const cleanQuestion = question.trim()
+            const fullQuestion = /^what if(?:\s|[.!?…]|$)/i.test(cleanQuestion)
+              ? cleanQuestion
+              : `What if ${cleanQuestion}`
+            await onSubmit(fullQuestion, answer)
+            setSubmitting(false)
+          }}
+        >
+          <label htmlFor="question">Question</label>
+          <div className="input-prefix">
+            <span aria-hidden="true">What if</span>
+            <input
+              id="question"
+              maxLength={MAX_FIELD_LENGTH - 8}
+              value={question}
+              onChange={(event) => setQuestion(event.target.value.replace(/^what if\s*/i, ''))}
+              placeholder="animals could talk?"
+              required
+            />
+          </div>
+          <label htmlFor="answer">Answer</label>
+          <textarea
+            id="answer"
+            maxLength={MAX_FIELD_LENGTH}
+            value={answer}
+            onChange={(event) => setAnswer(event.target.value)}
+            placeholder="Then the moon would be made of cheese."
+            rows={3}
             required
           />
-        </div>
-        <label htmlFor="answer">Answer</label>
-        <textarea
-          id="answer"
-          maxLength={MAX_FIELD_LENGTH}
-          value={answer}
-          onChange={(event) => setAnswer(event.target.value)}
-          placeholder="Then the moon would be made of cheese."
-          rows={3}
-          required
-        />
-        <div className="form-footer">
-          <span>Answers are best in one short sentence.</span>
-          <button className="button button-primary" type="submit" disabled={submitting}>
-            {submitting ? 'Submitting…' : 'Submit card'}
-          </button>
-        </div>
-      </form>
-      <p className="helper-text">
-        {room.players.filter((player) => player.submitted).length} of {room.players.length} players have submitted
-      </p>
+          <div className="form-footer">
+            <span>Answers are best in one short sentence.</span>
+            <button className="button button-primary" type="submit" disabled={submitting}>
+              {submitting ? 'Submitting…' : 'Submit card'}
+            </button>
+          </div>
+        </form>
+        <p className="helper-text">
+          {room.players.filter((player) => player.submitted).length} of {room.players.length} players have submitted
+        </p>
+      </div>
     </section>
   )
 }
 
-function RevealPanel({ room, myTurn, nextIsQuestion, onReveal }) {
+function RevealPanel({ room, myPlayerId, myTurn, nextIsQuestion, onReveal }) {
+  const [activeTab, setActiveTab] = useState('card')
   const action = room.nextReveal
   const currentReveal = room.reveals.at(-1)
   const isStarterChoice = nextIsQuestion && room.reveals.length === 0
   const canReveal = isStarterChoice || (myTurn && Boolean(action))
   const revealType = isStarterChoice ? 'question' : action?.type
+  const privateField = getRevealCardField(room, myPlayerId)
+  const displayedField = privateField ?? currentReveal
 
   return (
     <section className="stage-card reveal-stage">
-      <span className="stage-number">03 / READ THE ROOM</span>
-      <h2>{room.reveals.length ? 'Let the cards do the talking.' : 'Who wants to go first?'}</h2>
-      <p className="stage-copy">
-        {isStarterChoice
-          ? 'Choose a starting player. They reveal the Question on their assigned card.'
-          : action
-            ? action.type === 'answer'
-              ? `${nicknameFor(room, action.playerId)} reveals an Answer, then their Question.`
-              : `${nicknameFor(room, action.playerId)} reveals their Question.`
-            : 'The round is ready to begin.'}
-      </p>
-
-      {currentReveal && (
-        <div className={`current-reveal reveal-${currentReveal.type}`} aria-live="polite" aria-atomic="true">
-          <span className="reveal-label">
-            {currentReveal.type === 'question' ? 'QUESTION' : 'ANSWER'}
-            {' · CARD BY '}
-            {currentReveal.authorNickname ?? 'AUTHOR UNAVAILABLE'}
-          </span>
-          <p>{currentReveal.text}</p>
-        </div>
-      )}
-
-      {canReveal && revealType && (
-        <button className="button button-primary reveal-button" type="button" onClick={() => onReveal(revealType)}>
-          Show {revealType === 'question' ? 'Question' : 'Answer'}
-        </button>
-      )}
-      {!canReveal && action && (
-        <div className="waiting-row">
-          <span className="waiting-spinner" aria-hidden="true" />
-          <span>Waiting for {nicknameFor(room, action.playerId)} to show their {action.type}…</span>
-        </div>
-      )}
-      {room.nextReveal && (
-        <p className="turn-hint">
-          {myTurn ? `It’s your turn to show the ${action.type}.` : `Your card stays private until its turn.`}
+      <RoundTabs
+        activeTab={activeTab}
+        onChange={setActiveTab}
+        tabs={[
+          { id: 'card', label: 'Your card' },
+          { id: 'progress', label: 'Progress' },
+        ]}
+      />
+      <div
+        id="round-card-panel"
+        role="tabpanel"
+        aria-labelledby="round-card-tab"
+        hidden={activeTab !== 'card'}
+      >
+        <span className="stage-number">03 / READ THE ROOM</span>
+        <h2>{room.reveals.length ? 'Let the cards do the talking.' : 'Who wants to go first?'}</h2>
+        <p className="stage-copy">
+          {isStarterChoice
+            ? 'Choose a starting player. They reveal the Question on their assigned card.'
+            : action
+              ? action.type === 'answer'
+                ? `${nicknameFor(room, action.playerId)} reveals an Answer, then their Question.`
+                : `${nicknameFor(room, action.playerId)} reveals their Question.`
+              : 'The round is ready to begin.'}
         </p>
-      )}
+
+        {displayedField && (
+          <div className={`current-reveal reveal-${displayedField.type}`} aria-live="polite" aria-atomic="true">
+            <span className="reveal-label">
+              {displayedField.type === 'question' ? 'QUESTION' : 'ANSWER'}
+              {privateField
+                ? ' · YOUR CARD'
+                : ` · CARD BY ${currentReveal.authorNickname ?? 'AUTHOR UNAVAILABLE'}`}
+            </span>
+            <p>{displayedField.text}</p>
+          </div>
+        )}
+
+        {canReveal && revealType && (
+          <button className="button button-primary reveal-button" type="button" onClick={() => onReveal(revealType)}>
+            Show {revealType === 'question' ? 'Question' : 'Answer'}
+          </button>
+        )}
+        {!canReveal && action && (
+          <div className="waiting-row">
+            <span className="waiting-spinner" aria-hidden="true" />
+            <span>Waiting for {nicknameFor(room, action.playerId)} to show their {action.type}…</span>
+          </div>
+        )}
+        {room.nextReveal && (
+          <p className="turn-hint">
+            {myTurn ? `It’s your turn to show the ${action.type}.` : `Your card stays private until its turn.`}
+          </p>
+        )}
+      </div>
+      <div
+        id="round-progress-panel"
+        role="tabpanel"
+        aria-labelledby="round-progress-tab"
+        hidden={activeTab !== 'progress'}
+      >
+        <span className="stage-number">ROUND PROGRESS</span>
+        <h2>{room.reveals.length} {room.reveals.length === 1 ? 'field' : 'fields'} revealed</h2>
+        <p className="stage-copy" aria-live="polite">
+          {isStarterChoice
+            ? 'Any player can start by revealing their Question.'
+            : action
+              ? action.type === 'answer'
+                ? `Up next: ${nicknameFor(room, action.playerId)} reveals the Answer, then their Question.`
+                : `Up next: ${nicknameFor(room, action.playerId)} reveals their Question.`
+              : 'The reveal sequence is complete.'}
+        </p>
+        {room.reveals.length > 0 ? (
+          <ol className="reveal-list" aria-label="Revealed fields in order">
+            {room.reveals.map((reveal, index) => (
+              <li className={`reveal-item reveal-${reveal.type}`} key={`${index}-${reveal.playerId}`}>
+                <span className="reveal-index">{String(index + 1).padStart(2, '0')}</span>
+                <div>
+                  <span className="reveal-label">
+                    {reveal.type === 'question' ? 'QUESTION' : 'ANSWER'}
+                    {' · CARD BY '}
+                    {reveal.authorNickname ?? 'AUTHOR UNAVAILABLE'}
+                  </span>
+                  <p>{reveal.text}</p>
+                </div>
+              </li>
+            ))}
+          </ol>
+        ) : (
+          <p className="helper-text">Revealed questions and answers will appear here in order.</p>
+        )}
+      </div>
     </section>
+  )
+}
+
+function RoundTabs({ activeTab, onChange, tabs }) {
+  const tabRefs = useRef({})
+
+  function handleKeyDown(event, tabIndex) {
+    let nextIndex
+    if (event.key === 'ArrowRight' || event.key === 'ArrowDown') {
+      nextIndex = (tabIndex + 1) % tabs.length
+    } else if (event.key === 'ArrowLeft' || event.key === 'ArrowUp') {
+      nextIndex = (tabIndex - 1 + tabs.length) % tabs.length
+    } else if (event.key === 'Home') {
+      nextIndex = 0
+    } else if (event.key === 'End') {
+      nextIndex = tabs.length - 1
+    }
+
+    if (nextIndex !== undefined) {
+      event.preventDefault()
+      const nextTab = tabs[nextIndex]
+      onChange?.(nextTab.id)
+      tabRefs.current[nextTab.id]?.focus()
+    }
+  }
+
+  return (
+    <div className="round-tabs" role="tablist" aria-label="Round view">
+      {tabs.map((tab, index) => (
+        <button
+          aria-controls={`round-${tab.id}-panel`}
+          aria-selected={activeTab === tab.id}
+          className="round-tab"
+          id={`round-${tab.id}-tab`}
+          key={tab.id}
+          onClick={() => onChange?.(tab.id)}
+          onKeyDown={(event) => handleKeyDown(event, index)}
+          ref={(element) => { tabRefs.current[tab.id] = element }}
+          role="tab"
+          tabIndex={activeTab === tab.id ? 0 : -1}
+          type="button"
+        >
+          {tab.label}
+        </button>
+      ))}
+    </div>
   )
 }
 

@@ -2,6 +2,10 @@
 
 Completed interviews are stored as separate Markdown files named `YYYY-MM-DD-topic-slug.md`, using the interview's local date. Add each new entry to the top of this index with its date, topic, outcome, and a link. Do not combine multiple interviews into one long file. If an older interview's date is unknown, keep it clearly marked as undated rather than estimating.
 
+## 2026-11-12
+
+- [Reveal tabs and round progress](2026-11-12-reveal-tabs-progress.md) — Auto-deal after the final submission, then show dealt-card and public progress tabs during reveals.
+
 ## 2026-11-11
 
 - [Room and nickname naming](2026-11-11-room-and-nickname-naming.md) — Require a unique 4–39 character room name and guest nickname when creating a room; require a 4–39 character nickname when joining.

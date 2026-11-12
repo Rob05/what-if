@@ -272,6 +272,13 @@ export class Room {
         return json({ error: 'Player session is not valid for this room.' }, 401)
       }
     }
+    if (this.room.phase === 'submitting' && everyoneSubmitted(this.room)) {
+      await this.mutate((room) => {
+        if (room.phase === 'submitting' && everyoneSubmitted(room)) {
+          distributeCards(room)
+        }
+      })
+    }
     return json({ state: this.view(this.room, player?.id) })
   }
 
@@ -321,9 +328,6 @@ export class Room {
             break
           case 'submit':
             submitCard(room, actor.id, body.question ?? '', body.answer ?? '')
-            break
-          case 'distribute':
-            distributeCards(room)
             break
           case 'reveal':
             reveal(room, actor.id, body.type)
@@ -480,6 +484,9 @@ export class Room {
 
       const nextRoom = structuredClone(this.room)
       const result = operation(nextRoom)
+      if (nextRoom.phase === 'submitting' && everyoneSubmitted(nextRoom)) {
+        distributeCards(nextRoom)
+      }
       nextRoom.lastActivityAt = Date.now()
       await this.ctx.storage.put('room', nextRoom)
       this.room = nextRoom

@@ -99,7 +99,7 @@ The online version uses the same imaginative, mismatched Question/Answer reveal 
 
 - Each player submits one hidden card containing both a question and an answer. The question must begin with “What if…”.
 - Each question and answer is limited to 500 characters.
-- Once all active players have submitted, any active player may distribute the cards. Shuffle and assign whole cards so nobody receives their own.
+- Once all active players have submitted, automatically shuffle and assign whole cards so nobody receives their own. The reveal phase begins immediately; no player needs to distribute the cards manually.
 - The starting player reveals the Question on their assigned card.
 - The next player reveals the Answer on their own assigned card, then reveals the Question on that same card. Continue in room order.
 - The starting player's Answer is revealed last, closing the chain. Every active player reveals one Answer to complete the round.

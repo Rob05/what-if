@@ -14,7 +14,7 @@ This document records the product decisions gathered before implementation. The 
 - Nicknames are unique within a room and 4–39 characters after trimming.
 - Every player must mark Ready before a round can start. Once everyone is ready, any active player may start it.
 - New players may join between rounds.
-- Any active player may distribute cards once all active players have submitted.
+- Automatically shuffle and assign cards as soon as all active players have submitted; no player action is needed to start the reveal phase.
 - Empty rooms expire. Players have 30 seconds to reconnect after losing connection.
 
 ## Cards and reveal sequence
@@ -22,7 +22,7 @@ This document records the product decisions gathered before implementation. The 
 - Every player submits one card containing both a question and an answer. Questions must begin with “What if…”.
 - Questions and answers are limited to 500 characters each.
 - Submitted content is hidden from other players until it is revealed.
-- Once every active player has submitted, the cards are shuffled and assigned so no player receives their own card.
+- As soon as every active player has submitted, automatically shuffle and assign cards so no player receives their own card.
 - The player's nickname is attached to their submitted card. Keep card author details hidden from the room until the card's first field is revealed.
 - One player starts by revealing the Question on their assigned card.
 - The next player reveals the Answer on their own assigned card, then reveals the Question on that same card.
@@ -30,7 +30,10 @@ This document records the product decisions gathered before implementation. The 
 - The starting player's Answer is revealed last, closing the chain. The round completes after each active player has revealed an Answer.
 - The comic pairing is between one player's Question and the next player's Answer, even though each submitted card contains both fields.
 - Label every revealed Question and Answer with the author name attached to that card. The player revealing a field remains the same room player; random distribution changes only which card they read, never the player identity or browser session.
-- Keep card entry and reveal screens focused on the active Question/Answer task. During a reveal, show the latest revealed field rather than the full sequence. Put room sharing (including its QR code) and the player list in a hamburger menu.
+- During card submission, show one **Your card** tab for card entry and its submission status. After automatic distribution, show **Your card** and **Progress** tabs, defaulting to **Your card**.
+- In the reveal phase, the card tab shows only the player's currently actionable field from their assigned card, with its reveal action; otherwise it shows the latest public reveal and turn status. Preserve the existing reveal order.
+- The Progress tab is always available during reveals and shows all public fields in order, how many fields have been revealed, and whose reveal is next. Never show unrevealed card content in this tab. Switching tabs does not change the turn or interrupt a reveal.
+- Keep each view focused on the active Question/Answer task. Put room sharing (including its QR code) and the player list in a hamburger menu.
 - After a round completes, show each Question with the next Answer in reveal order, including the final Question with the closing Answer. Preserve the completed round for review in room history.
 
 ## Rounds, departures, and reconnection

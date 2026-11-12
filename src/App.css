@@ -525,6 +525,41 @@ p {
   padding: clamp(22px, 4vw, 38px);
 }
 
+.round-tabs {
+  display: flex;
+  gap: 6px;
+  margin: 0 0 26px;
+  padding: 4px;
+  border: 1px solid var(--line);
+  border-radius: 14px;
+  background: #f8f6f0;
+}
+
+.round-tab {
+  min-height: 40px;
+  flex: 1;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 10px;
+  background: transparent;
+  color: var(--muted);
+  font: inherit;
+  font-size: 13px;
+  font-weight: 750;
+  cursor: pointer;
+}
+
+.round-tab[aria-selected="true"] {
+  background: var(--paper);
+  box-shadow: 0 2px 8px rgba(58, 46, 28, 0.08);
+  color: var(--ink);
+}
+
+.round-tab:focus-visible {
+  outline: 2px solid var(--violet);
+  outline-offset: 2px;
+}
+
 .stage-number {
   display: block;
   margin-bottom: 15px;

@@ -265,6 +265,68 @@ describe('active room directory', () => {
     })
   })
 
+  it('automatically distributes cards after the final player submits', async () => {
+    const directory = new RoomDirectory(createContext())
+    const room = new Room(createContext(), {
+      ROOM_DIRECTORY: createDirectoryBinding(directory),
+    })
+    const initialized = await room.fetch(new Request('https://room.internal/init', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({
+        roomId: '00000000-0000-0000-0000-000000000009',
+        roomName: 'Auto Deal Room',
+        nickname: 'Host Player',
+      }),
+    }))
+    const { player: host } = await initialized.json()
+    const joined = await room.fetch(new Request('https://room.internal/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'join', nickname: 'Guest Player' }),
+    }))
+    const { player: guest } = await joined.json()
+    const players = [host, guest]
+    for (const player of room.room.players) {
+      player.connected = true
+      player.disconnectedAt = null
+    }
+
+    const act = (player, action, fields = {}) => room.fetch(new Request('https://room.internal/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action, ...player, ...fields }),
+    }))
+    for (const player of players) {
+      await act(player, 'ready', { ready: true })
+    }
+    await act(host, 'start-round')
+    await act(host, 'submit', {
+      question: 'What if the clouds were made of popcorn?',
+      answer: 'Then the birds would bring butter.',
+    })
+    expect(room.room.phase).toBe('submitting')
+
+    const finalSubmission = await act(guest, 'submit', {
+      question: 'What if the ocean turned purple?',
+      answer: 'Then the fish would wear sunglasses.',
+    })
+    const { state } = await finalSubmission.json()
+
+    expect(state).toMatchObject({
+      phase: 'revealing',
+      reveals: [],
+      myCard: {
+        question: expect.any(String),
+        answer: expect.any(String),
+      },
+    })
+    for (const player of room.room.players) {
+      const card = room.room.cards.find((item) => item.id === room.room.assignments[player.id])
+      expect(card.authorId).not.toBe(player.id)
+    }
+  })
+
   it('atomically rejects duplicate active room names ignoring case and surrounding spaces', async () => {
     const directory = new RoomDirectory(createContext())
     const env = {
