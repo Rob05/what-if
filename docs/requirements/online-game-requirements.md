@@ -5,11 +5,13 @@ This document records the product decisions gathered before implementation. The 
 ## Rooms and players
 
 - The game supports multiple independent rooms, each with its own QR join code/link.
+- Room names are required, 4–39 characters after trimming, and unique case-insensitively among active rooms. Show the name in the active-room directory and room header, including for private rooms. Release the name when its room closes or expires.
 - The landing page lists occupied, open rooms and shows a lock for private rooms. Closed and empty rooms are not listed. Players can join a listed room only between rounds; a room in progress remains visible but cannot be joined until it is in the lobby or between rounds.
 - A room can be created as public or private. A private room has a user-defined access code of at least five characters, separate from its room ID and invitation link. The landing page shows private rooms as locked; joining one requires the correct code, which is validated by the server and never included in public room listings or state.
 - A room can have one or more occupants, but a round requires at least two active players.
-- Players join as guests using a nickname; accounts are not required.
-- Nicknames are unique within a room and limited to 24 characters.
+- Creating a room requires the room name and creator's nickname; the creator joins as the first player.
+- Players join as guests using a nickname, not a login username; accounts are not required.
+- Nicknames are unique within a room and 4–39 characters after trimming.
 - Every player must mark Ready before a round can start. Once everyone is ready, any active player may start it.
 - New players may join between rounds.
 - Any active player may distribute cards once all active players have submitted.
@@ -28,11 +30,14 @@ This document records the product decisions gathered before implementation. The 
 - The starting player's Answer is revealed last, closing the chain. The round completes after each active player has revealed an Answer.
 - The comic pairing is between one player's Question and the next player's Answer, even though each submitted card contains both fields.
 - Label every revealed Question and Answer with the author name attached to that card. The player revealing a field remains the same room player; random distribution changes only which card they read, never the player identity or browser session.
+- Keep card entry and reveal screens focused on the active Question/Answer task. During a reveal, show the latest revealed field rather than the full sequence. Put room sharing (including its QR code) and the player list in a hamburger menu.
+- After a round completes, show each Question with the next Answer in reveal order, including the final Question with the closing Answer. Preserve the completed round for review in room history.
 
 ## Rounds, departures, and reconnection
 
 - The same room can play multiple rounds using fresh cards.
 - Keep the final revealed answer and completed round visible until a player chooses what happens next.
+- During an active round, the menu's Leave game action removes only that player according to the existing departure rules. After a round completes, label the equivalent action Return to lobby; it also removes only that player and returns them to the home screen. Do not add a per-player lobby or spectator state.
 - Any active player may choose to start another round or end the game. Starting another round archives the completed round and returns everyone to the lobby; all active players must be ready before any player can start the next round.
 - Ending the game requires confirmation and returns everyone to the lobby. Keep every completed round available there for review, and leave the room open so players may review or play again later.
 - From the lobby after ending the game, any active player may confirm that the room should be closed. Once closed, deny player access and new joins, but retain the room data in the Durable Object store; closing a room is not a request to erase its stored data.

@@ -9,6 +9,8 @@ import {
   endGame,
   everyoneReady,
   everyoneSubmitted,
+  normalizeNickname,
+  normalizeRoomName,
   pauseRound,
   removeExpiredDisconnectedPlayer,
   removePlayer,
@@ -38,6 +40,8 @@ export default {
         if (!body || typeof body !== 'object' || Array.isArray(body)) {
           throw new HttpError('Request body must be a JSON object.', 400)
         }
+        const roomName = normalizeRequestName(body.roomName, normalizeRoomName)
+        const nickname = normalizeRequestName(body.nickname, normalizeNickname)
         if (body.isPrivate !== undefined && typeof body.isPrivate !== 'boolean') {
           throw new HttpError('Private room selection must be true or false.', 400)
         }
@@ -52,12 +56,36 @@ export default {
         const response = await room.fetch('https://room.internal/init', {
           method: 'POST',
           headers: jsonHeaders,
-          body: JSON.stringify({ roomId, accessCode }),
+          body: JSON.stringify({ roomId, roomName, nickname, accessCode }),
         })
         if (!response.ok) {
           return response
         }
-        return json({ roomId }, 201)
+        const initializedRoom = await response.json()
+        const directory = env.ROOM_DIRECTORY.get(env.ROOM_DIRECTORY.idFromName('active-rooms'))
+        const registration = await directory.fetch('https://directory.internal/rooms', {
+          method: 'POST',
+          headers: jsonHeaders,
+          body: JSON.stringify({
+            roomId,
+            roomName,
+            isPrivate,
+            phase: 'lobby',
+            playerCount: 1,
+            createdAt: Date.now(),
+          }),
+        })
+        if (!registration.ok) {
+          const discardResponse = await room.fetch('https://room.internal/discard', { method: 'POST' })
+          if (!discardResponse.ok) {
+            console.error('Room creation failed, and its unregistered room state could not be removed.')
+          }
+          if (registration.status === 409) {
+            return json({ error: 'A room with that name already exists.' }, 409)
+          }
+          throw new HttpError(`Could not register the room name (${registration.status}).`, 503)
+        }
+        return json({ roomId, player: initializedRoom.player }, 201)
       }
 
       const match = url.pathname.match(/^\/api\/rooms\/([0-9a-f-]{36})(\/connect)?$/i)
@@ -111,6 +139,9 @@ export class Room {
     if (url.pathname === '/init' && request.method === 'POST') {
       return this.initialize(request)
     }
+    if (url.pathname === '/discard' && request.method === 'POST') {
+      return this.discard()
+    }
     if (url.pathname === '/connect' && request.method === 'GET') {
       return this.connect(request)
     }
@@ -137,6 +168,7 @@ export class Room {
       headers: jsonHeaders,
       body: JSON.stringify({
         roomId: this.room.id,
+        roomName: roomNameFor(this.room),
         isPrivate: Boolean(this.room.accessCode),
         phase: this.room.phase,
         playerCount: activePlayers(this.room).length,
@@ -162,11 +194,34 @@ export class Room {
     if (this.room) {
       return json({ error: 'Room already exists.' }, 409)
     }
-    const { roomId, accessCode = null } = await readJson(request)
-    this.room = createRoom(roomId)
+    const {
+      roomId,
+      roomName: suppliedRoomName,
+      nickname: suppliedNickname,
+      accessCode = null,
+    } = await readJson(request)
+    const roomName = normalizeRequestName(suppliedRoomName, normalizeRoomName)
+    const nickname = normalizeRequestName(suppliedNickname, normalizeNickname)
+    this.room = createRoom(roomId, Date.now(), roomName)
     this.room.accessCode = accessCode
+    const player = {
+      id: crypto.randomUUID(),
+      token: crypto.randomUUID(),
+    }
+    addPlayer(this.room, { ...player, nickname })
     await this.ctx.storage.put('room', this.room)
-    return json({ roomId }, 201)
+    await this.scheduleAlarm()
+    return json({
+      roomId,
+      player: { playerId: player.id, token: player.token },
+    }, 201)
+  }
+
+  async discard() {
+    await this.ctx.storage.deleteAlarm()
+    await this.ctx.storage.deleteAll()
+    this.room = null
+    return json({ ok: true })
   }
 
   async connect(request) {
@@ -475,6 +530,7 @@ export class Room {
     if (room.accessCode && !playerId) {
       return {
         id: room.id,
+        roomName: roomNameFor(room),
         phase: room.phase,
         isPrivate: true,
         players: [],
@@ -491,6 +547,7 @@ export class Room {
 
     return {
       id: room.id,
+      roomName: roomNameFor(room),
       isPrivate: Boolean(room.accessCode),
       phase: room.phase,
       roundNumber: room.roundNumber,
@@ -601,6 +658,9 @@ export class RoomDirectory {
     if (url.pathname === '/rooms' && request.method === 'GET') {
       return this.list()
     }
+    if (url.pathname === '/rooms' && request.method === 'POST') {
+      return this.register(request)
+    }
     if (url.pathname === '/rooms' && request.method === 'PUT') {
       return this.update(request)
     }
@@ -620,22 +680,78 @@ export class RoomDirectory {
     })
   }
 
-  async update(request) {
+  async register(request) {
     const room = await readJson(request)
-    if (!room.roomId || !room.phase || !Number.isInteger(room.playerCount)) {
+    let roomName
+    try {
+      roomName = normalizeRoomName(room.roomName)
+    } catch (error) {
+      return json({ error: error.message }, 400)
+    }
+    if (!room.roomId || !room.phase || !Number.isInteger(room.playerCount) || room.playerCount < 1) {
       return json({ error: 'Room listing data is invalid.' }, 400)
     }
-    await this.enqueue(async () => {
+
+    return this.enqueue(async () => {
+      const duplicateName = Object.values(this.rooms).some(
+        (existing) => existing.roomId !== room.roomId
+          && roomNameFor({ id: existing.roomId, roomName: existing.roomName }).toLocaleLowerCase()
+            === roomName.toLocaleLowerCase(),
+      )
+      if (duplicateName) {
+        return json({ error: 'A room with that name already exists.' }, 409)
+      }
+
       this.rooms[room.roomId] = {
         roomId: room.roomId,
+        roomName,
         isPrivate: Boolean(room.isPrivate),
         phase: room.phase,
         playerCount: room.playerCount,
         createdAt: room.createdAt,
       }
       await this.ctx.storage.put('rooms', this.rooms)
+      return json({ ok: true })
     })
-    return json({ ok: true })
+  }
+
+  async update(request) {
+    const room = await readJson(request)
+    let roomName
+    try {
+      roomName = normalizeRoomName(room.roomName)
+    } catch (error) {
+      return json({ error: error.message }, 400)
+    }
+    if (!room.roomId || !room.phase || !Number.isInteger(room.playerCount)) {
+      return json({ error: 'Room listing data is invalid.' }, 400)
+    }
+
+    return this.enqueue(async () => {
+      const existing = this.rooms[room.roomId]
+      if (existing && roomNameFor({ id: existing.roomId, roomName: existing.roomName }).toLocaleLowerCase()
+        !== roomName.toLocaleLowerCase()) {
+        return json({ error: 'Room names cannot be changed after creation.' }, 409)
+      }
+      const duplicateName = Object.values(this.rooms).some(
+        (listedRoom) => listedRoom.roomId !== room.roomId
+          && roomNameFor({ id: listedRoom.roomId, roomName: listedRoom.roomName }).toLocaleLowerCase()
+            === roomName.toLocaleLowerCase(),
+      )
+      if (duplicateName) {
+        return json({ error: 'A room with that name already exists.' }, 409)
+      }
+      this.rooms[room.roomId] = {
+        roomId: room.roomId,
+        roomName,
+        isPrivate: Boolean(room.isPrivate),
+        phase: room.phase,
+        playerCount: room.playerCount,
+        createdAt: room.createdAt,
+      }
+      await this.ctx.storage.put('rooms', this.rooms)
+      return json({ ok: true })
+    })
   }
 
   async remove(roomId) {
@@ -655,6 +771,19 @@ export class RoomDirectory {
 
 function normalizeAccessCode(value) {
   return typeof value === 'string' ? value.trim() : ''
+}
+
+function normalizeRequestName(value, normalize) {
+  try {
+    return normalize(value)
+  } catch (error) {
+    throw new HttpError(error.message, 400)
+  }
+}
+
+function roomNameFor(room) {
+  const roomId = room.id ?? room.roomId
+  return room.roomName ?? `Room ${roomId.slice(0, 8).toUpperCase()}`
 }
 
 async function readJson(request) {

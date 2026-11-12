@@ -85,10 +85,12 @@ The online version uses the same imaginative, mismatched Question/Answer reveal 
 ### Rooms and starting a round
 
 - A room has its own QR join code/link and can have one or more occupants. A playable round requires at least two active players.
+- Every room has a required 4–39 character display name, trimmed before validation and unique case-insensitively among active rooms. The name appears in the active-room directory and room header, including for private rooms. Release the name when its room closes or expires.
 - The landing page lists occupied, open rooms. It marks private rooms with a lock, and allows joining only while the room is in its lobby or between rounds.
 - A room may be public or private. Private rooms require a user-defined access code of at least five characters to join. The access code is separate from the room's invitation link and is checked by the server; it is not shown in public room listings or room state.
-- Players join with a nickname; no account is required.
-- Nicknames are unique in their room and at most 24 characters long.
+- Creating a room requires a room name and the creator's nickname; creating the room also joins the creator as its first player.
+- Players join with a guest nickname, not a login username; no account is required.
+- Nicknames are unique in their room and 4–39 characters long after trimming.
 - All players mark Ready before a round can start. Once everyone is ready, any active player may start.
 - A room can host multiple rounds. New players may join between rounds.
 - Rooms expire when empty.

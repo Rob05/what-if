@@ -1,6 +1,12 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
 import { QRCodeSVG } from 'qrcode.react'
-import { MAX_FIELD_LENGTH, RECONNECT_GRACE_MS } from './game.js'
+import {
+  MAX_FIELD_LENGTH,
+  MAX_NAME_LENGTH,
+  MIN_NAME_LENGTH,
+  pairRevealsBySequence,
+  RECONNECT_GRACE_MS,
+} from './game.js'
 import './App.css'
 
 const SESSION_PREFIX = 'what-if-room:'
@@ -14,7 +20,13 @@ function App() {
     return () => window.removeEventListener('popstate', handlePopState)
   }, [])
 
-  const navigate = useCallback((nextRoomId) => {
+  const navigate = useCallback((nextRoomId, player) => {
+    if (nextRoomId && player) {
+      window.localStorage.setItem(
+        `${SESSION_PREFIX}${nextRoomId}`,
+        JSON.stringify(player),
+      )
+    }
     const path = nextRoomId ? `/room/${nextRoomId}` : '/'
     window.history.pushState({}, '', path)
     setRoomId(nextRoomId)
@@ -28,6 +40,8 @@ function App() {
 function HomePage({ onRoomCreated }) {
   const [roomCode, setRoomCode] = useState('')
   const [rooms, setRooms] = useState([])
+  const [roomName, setRoomName] = useState('')
+  const [nickname, setNickname] = useState('')
   const [isPrivate, setIsPrivate] = useState(false)
   const [accessCode, setAccessCode] = useState('')
   const [busy, setBusy] = useState(false)
@@ -68,6 +82,14 @@ function HomePage({ onRoomCreated }) {
   }, [])
 
   async function createRoom() {
+    if (!isValidName(roomName)) {
+      setError(`Room names must be between ${MIN_NAME_LENGTH} and ${MAX_NAME_LENGTH} characters.`)
+      return
+    }
+    if (!isValidName(nickname)) {
+      setError(`Nicknames must be between ${MIN_NAME_LENGTH} and ${MAX_NAME_LENGTH} characters.`)
+      return
+    }
     const cleanAccessCode = accessCode.trim()
     if (isPrivate && [...cleanAccessCode].length < 5) {
       setError('Private room codes must be at least 5 characters.')
@@ -80,10 +102,15 @@ function HomePage({ onRoomCreated }) {
       const response = await fetch('/api/rooms', {
         method: 'POST',
         headers: { 'content-type': 'application/json' },
-        body: JSON.stringify({ isPrivate, accessCode: cleanAccessCode }),
+        body: JSON.stringify({
+          roomName,
+          nickname,
+          isPrivate,
+          accessCode: cleanAccessCode,
+        }),
       })
       const payload = await readResponse(response)
-      onRoomCreated(payload.roomId)
+      onRoomCreated(payload.roomId, payload.player)
     } catch (requestError) {
       setError(requestError.message)
     } finally {
@@ -123,10 +150,38 @@ function HomePage({ onRoomCreated }) {
       </section>
 
       <section className="home-actions" aria-label="Start or join a game">
-        <div className="action-card create-card">
+        <form
+          className="action-card create-card create-form"
+          onSubmit={(event) => {
+            event.preventDefault()
+            createRoom()
+          }}
+        >
           <div className="action-icon" aria-hidden="true">✳</div>
           <h2>Start a new room</h2>
           <p>Make a room and invite everyone with its QR code.</p>
+          <label className="private-code-field">
+            Room name
+            <input
+              autoComplete="off"
+              maxLength={MAX_NAME_LENGTH}
+              minLength={MIN_NAME_LENGTH}
+              value={roomName}
+              onChange={(event) => setRoomName(event.target.value)}
+              required
+            />
+          </label>
+          <label className="private-code-field">
+            Your nickname
+            <input
+              autoComplete="nickname"
+              maxLength={MAX_NAME_LENGTH}
+              minLength={MIN_NAME_LENGTH}
+              value={nickname}
+              onChange={(event) => setNickname(event.target.value)}
+              required
+            />
+          </label>
           <label className="private-room-option">
             <input
               type="checkbox"
@@ -144,14 +199,14 @@ function HomePage({ onRoomCreated }) {
                 value={accessCode}
                 onChange={(event) => setAccessCode(event.target.value)}
                 minLength={5}
-                required
+                required={isPrivate}
               />
             </label>
           )}
-          <button className="button button-primary" type="button" onClick={createRoom} disabled={busy}>
+          <button className="button button-primary" type="submit" disabled={busy}>
             {busy ? 'Creating room…' : 'Create a room'}
           </button>
-        </div>
+        </form>
 
         <div className="action-card join-card">
           <div className="action-icon action-icon-lilac" aria-hidden="true">↗</div>
@@ -190,7 +245,7 @@ function HomePage({ onRoomCreated }) {
                 <article className="room-directory-card" key={room.roomId}>
                   <div className="room-directory-info">
                     <h3>
-                      Room {shortRoomId(room.roomId)}
+                      {room.roomName ?? `Room ${shortRoomId(room.roomId)}`}
                       {room.isPrivate && <span className="room-lock" aria-label="Private room">🔒</span>}
                     </h3>
                     <p>{room.playerCount} {room.playerCount === 1 ? 'player' : 'players'} · {phaseLabel(room.phase)}</p>
@@ -446,6 +501,10 @@ function RoomPage({ roomId, onLeave }) {
             className="nickname-form"
             onSubmit={(event) => {
               event.preventDefault()
+              if (!isValidName(nickname)) {
+                setError(`Nicknames must be between ${MIN_NAME_LENGTH} and ${MAX_NAME_LENGTH} characters.`)
+                return
+              }
               act('join', { nickname, accessCode: roomAccessCode })
             }}
           >
@@ -453,7 +512,8 @@ function RoomPage({ roomId, onLeave }) {
             <input
               id="nickname"
               autoComplete="nickname"
-              maxLength={24}
+              maxLength={MAX_NAME_LENGTH}
+              minLength={MIN_NAME_LENGTH}
               value={nickname}
               onChange={(event) => setNickname(event.target.value)}
               placeholder="e.g. Captain Maybe"
@@ -502,9 +562,15 @@ function RoomPage({ roomId, onLeave }) {
             <span aria-hidden="true" />
             {socketStatus === 'connected' ? 'Live room' : 'Reconnecting'}
           </span>
-          <button className="button button-quiet" type="button" onClick={() => act('leave')}>
-            Leave game
-          </button>
+          <RoomMenu
+            room={room}
+            me={myPlayer}
+            now={now}
+            joinUrl={joinUrl}
+            onCopy={copyInvite}
+            onRemove={(targetPlayerId) => act('remove-player', { targetPlayerId })}
+            onLeave={() => act('leave')}
+          />
         </div>
       </header>
 
@@ -512,7 +578,7 @@ function RoomPage({ roomId, onLeave }) {
         <section className="game-column">
           <div className="room-heading">
             <div>
-              <p className="eyebrow">Room {shortRoomId(room.id)}</p>
+              <p className="eyebrow">{room.roomName} · ROOM {shortRoomId(room.id)}</p>
               <h1>{room.phase === 'lobby' ? 'The room is yours.' : `Round ${room.roundNumber}`}</h1>
             </div>
             <div className={`phase-pill phase-${room.phase}`}>
@@ -579,15 +645,6 @@ function RoomPage({ roomId, onLeave }) {
           )}
         </section>
 
-        <aside className="room-sidebar">
-          <InviteCard joinUrl={joinUrl} onCopy={copyInvite} />
-          <PlayersCard
-            players={room.players}
-            me={myPlayer}
-            now={now}
-            onRemove={(targetPlayerId) => act('remove-player', { targetPlayerId })}
-          />
-        </aside>
       </div>
     </main>
   )
@@ -721,6 +778,7 @@ function SubmissionPanel({ room, me, onSubmit, onDistribute, canDistribute }) {
 
 function RevealPanel({ room, myTurn, nextIsQuestion, onReveal }) {
   const action = room.nextReveal
+  const currentReveal = room.reveals.at(-1)
   const isStarterChoice = nextIsQuestion && room.reveals.length === 0
   const canReveal = isStarterChoice || (myTurn && Boolean(action))
   const revealType = isStarterChoice ? 'question' : action?.type
@@ -739,22 +797,15 @@ function RevealPanel({ room, myTurn, nextIsQuestion, onReveal }) {
             : 'The round is ready to begin.'}
       </p>
 
-      {room.reveals.length > 0 && (
-        <ol className="reveal-list" aria-live="polite">
-          {room.reveals.map((revealItem, index) => (
-            <li className={`reveal-item reveal-${revealItem.type}`} key={`${index}-${revealItem.playerId}`}>
-              <span className="reveal-index">{String(index + 1).padStart(2, '0')}</span>
-              <div>
-                <span className="reveal-label">
-                  {revealItem.type === 'question' ? 'QUESTION' : 'ANSWER'}
-                  {' · CARD BY '}
-                  {revealItem.authorNickname ?? 'AUTHOR UNAVAILABLE'}
-                </span>
-                <p>{revealItem.text}</p>
-              </div>
-            </li>
-          ))}
-        </ol>
+      {currentReveal && (
+        <div className={`current-reveal reveal-${currentReveal.type}`} aria-live="polite" aria-atomic="true">
+          <span className="reveal-label">
+            {currentReveal.type === 'question' ? 'QUESTION' : 'ANSWER'}
+            {' · CARD BY '}
+            {currentReveal.authorNickname ?? 'AUTHOR UNAVAILABLE'}
+          </span>
+          <p>{currentReveal.text}</p>
+        </div>
       )}
 
       {canReveal && revealType && (
@@ -811,7 +862,7 @@ function CompletedPanel({ room, onNextRound, onEndGame }) {
       <p className="stage-copy">
         The final answer will stay here until someone chooses what happens next.
       </p>
-      <RevealList reveals={room.reveals} />
+      <RevealPairs reveals={room.reveals} />
       <div className="stage-action-row round-end-actions">
         <button className="button button-primary" type="button" onClick={onNextRound}>
           Start another round
@@ -838,7 +889,7 @@ function RoundHistory({ history }) {
         {[...history].reverse().map((round) => (
           <section className="round-history-item" key={round.roundNumber}>
             <h3>Round {round.roundNumber}</h3>
-            <RevealList reveals={round.reveals} />
+            <RevealPairs reveals={round.reveals} />
           </section>
         ))}
       </div>
@@ -846,21 +897,50 @@ function RoundHistory({ history }) {
   )
 }
 
-function RevealList({ reveals }) {
+function RevealPairs({ reveals }) {
+  const pairs = pairRevealsBySequence(reveals)
+
   return (
-    <ol className="reveal-list" aria-live="polite">
-      {reveals.map((revealItem, index) => (
-        <li className={`reveal-item reveal-${revealItem.type}`} key={`${index}-${revealItem.playerId}`}>
+    <ol className="reveal-list reveal-pair-list">
+      {pairs.map(({ question, answer }, index) => (
+        <li className="reveal-item reveal-pair" key={`${index}-${question.playerId}`}>
           <span className="reveal-index">{String(index + 1).padStart(2, '0')}</span>
-          <div>
-            <span className="reveal-label">
-              {revealItem.type === 'question' ? 'QUESTION' : 'ANSWER'} · {revealItem.nickname}
-            </span>
-            <p>{revealItem.text}</p>
+          <div className="reveal-pair-fields">
+            <div className="reveal-pair-field">
+              <span className="reveal-label">
+                QUESTION · CARD BY {question.authorNickname ?? 'AUTHOR UNAVAILABLE'}
+              </span>
+              <p>{question.text}</p>
+            </div>
+            <div className="reveal-pair-field reveal-answer">
+              <span className="reveal-label">
+                NEXT ANSWER · CARD BY {answer.authorNickname ?? 'AUTHOR UNAVAILABLE'}
+              </span>
+              <p>{answer.text}</p>
+            </div>
           </div>
         </li>
       ))}
     </ol>
+  )
+}
+
+function RoomMenu({ room, me, now, joinUrl, onCopy, onRemove, onLeave }) {
+  const exitLabel = room.phase === 'completed' ? 'Return to lobby' : 'Leave game'
+
+  return (
+    <details className="room-menu">
+      <summary aria-label="Open room menu" title="Room menu">
+        <span aria-hidden="true">☰</span>
+      </summary>
+      <div className="room-menu-panel">
+        <InviteCard joinUrl={joinUrl} onCopy={onCopy} />
+        <PlayersCard players={room.players} me={me} now={now} onRemove={onRemove} />
+        <button className="button button-danger button-full" type="button" onClick={onLeave}>
+          {exitLabel}
+        </button>
+      </div>
+    </details>
   )
 }
 
@@ -978,6 +1058,11 @@ function phaseLabel(phase) {
     paused: 'Paused',
     completed: 'Between rounds',
   }[phase] ?? phase
+}
+
+function isValidName(value) {
+  const length = [...value.trim()].length
+  return length >= MIN_NAME_LENGTH && length <= MAX_NAME_LENGTH
 }
 
 export default App

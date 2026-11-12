@@ -1,10 +1,46 @@
 export const MIN_PLAYERS = 2
 export const MAX_FIELD_LENGTH = 500
+export const MIN_NAME_LENGTH = 4
+export const MAX_NAME_LENGTH = 39
 export const RECONNECT_GRACE_MS = 30_000
 
-export function createRoom(roomId, now = Date.now()) {
+export function normalizeRoomName(value) {
+  const roomName = typeof value === 'string' ? value.trim() : ''
+  if (!roomName) {
+    throw new Error('Enter a room name.')
+  }
+  if ([...roomName].length < MIN_NAME_LENGTH || [...roomName].length > MAX_NAME_LENGTH) {
+    throw new Error(`Room names must be between ${MIN_NAME_LENGTH} and ${MAX_NAME_LENGTH} characters.`)
+  }
+  return roomName
+}
+
+export function normalizeNickname(value) {
+  const nickname = typeof value === 'string' ? value.trim() : ''
+  if (!nickname) {
+    throw new Error('Enter a nickname to join.')
+  }
+  if ([...nickname].length < MIN_NAME_LENGTH || [...nickname].length > MAX_NAME_LENGTH) {
+    throw new Error(`Nicknames must be between ${MIN_NAME_LENGTH} and ${MAX_NAME_LENGTH} characters.`)
+  }
+  return nickname
+}
+
+export function pairRevealsBySequence(reveals) {
+  return reveals.flatMap((reveal, index) => {
+    if (reveal.type !== 'question') {
+      return []
+    }
+
+    const answer = reveals.slice(index + 1).find((item) => item.type === 'answer')
+    return answer ? [{ question: reveal, answer }] : []
+  })
+}
+
+export function createRoom(roomId, now = Date.now(), roomName = null) {
   return {
     id: roomId,
+    roomName,
     createdAt: now,
     lastActivityAt: now,
     phase: 'lobby',
@@ -29,13 +65,7 @@ export function addPlayer(room, { id, nickname, token, now = Date.now() }) {
     throw new Error('You can only join between rounds.')
   }
 
-  const cleanNickname = nickname.trim()
-  if (!cleanNickname) {
-    throw new Error('Enter a nickname to join.')
-  }
-  if (cleanNickname.length > 24) {
-    throw new Error('Nicknames must be 24 characters or fewer.')
-  }
+  const cleanNickname = normalizeNickname(nickname)
   if (activePlayers(room).some(
     (player) => player.nickname.toLocaleLowerCase() === cleanNickname.toLocaleLowerCase(),
   )) {

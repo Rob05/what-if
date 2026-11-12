@@ -8,7 +8,10 @@ import {
   endGame,
   everyoneReady,
   everyoneSubmitted,
+  normalizeNickname,
+  normalizeRoomName,
   pauseRound,
+  pairRevealsBySequence,
   removePlayer,
   removeExpiredDisconnectedPlayer,
   reveal,
@@ -58,9 +61,20 @@ function completeTwoPlayerRound(room, players) {
 }
 
 describe('room setup', () => {
+  it('requires room names and nicknames between 4 and 39 characters after trimming', () => {
+    expect(normalizeRoomName('  Room  ')).toBe('Room')
+    expect(normalizeNickname('  Guest  ')).toBe('Guest')
+    expect(normalizeRoomName('r'.repeat(39))).toBe('r'.repeat(39))
+    expect(normalizeNickname('n'.repeat(39))).toBe('n'.repeat(39))
+    expect(() => normalizeRoomName('abc')).toThrow('Room names must be between 4 and 39 characters.')
+    expect(() => normalizeRoomName('r'.repeat(40))).toThrow('Room names must be between 4 and 39 characters.')
+    expect(() => normalizeNickname('abc')).toThrow('Nicknames must be between 4 and 39 characters.')
+    expect(() => normalizeNickname('n'.repeat(40))).toThrow('Nicknames must be between 4 and 39 characters.')
+  })
+
   it('requires at least two connected ready players to start', () => {
     const room = createRoom('test-room')
-    addPlayer(room, { id: 'one', nickname: 'One', token: 'token' })
+    addPlayer(room, { id: 'one', nickname: 'Player One', token: 'token' })
     room.players[0].connected = true
     setPlayerReady(room, 'one', true)
 
@@ -158,6 +172,23 @@ describe('card distribution and reveal sequence', () => {
       ['player-1', 'answer'],
     ])
     expect(room.phase).toBe('completed')
+  })
+
+  it('pairs each question with the next answer in the completed reveal sequence', () => {
+    const reveals = [
+      { type: 'question', text: 'Question 1' },
+      { type: 'answer', text: 'Answer 2' },
+      { type: 'question', text: 'Question 2' },
+      { type: 'answer', text: 'Answer 3' },
+      { type: 'question', text: 'Question 3' },
+      { type: 'answer', text: 'Answer 1' },
+    ]
+
+    expect(pairRevealsBySequence(reveals)).toEqual([
+      { question: reveals[0], answer: reveals[1] },
+      { question: reveals[2], answer: reveals[3] },
+      { question: reveals[4], answer: reveals[5] },
+    ])
   })
 
   it('keeps the final reveal visible until another round is selected, then archives the full round', () => {
