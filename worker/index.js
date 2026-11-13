@@ -7,7 +7,6 @@ import {
   createRoom,
   distributeCards,
   endGame,
-  everyoneReady,
   everyoneSubmitted,
   normalizeNickname,
   normalizeRoomName,
@@ -17,7 +16,6 @@ import {
   resumeRound,
   reveal,
   roomIsExpired,
-  setPlayerReady,
   startRound,
   submitCard,
 } from '../src/game.js'
@@ -272,13 +270,6 @@ export class Room {
         return json({ error: 'Player session is not valid for this room.' }, 401)
       }
     }
-    if (this.room.phase === 'submitting' && everyoneSubmitted(this.room)) {
-      await this.mutate((room) => {
-        if (room.phase === 'submitting' && everyoneSubmitted(room)) {
-          distributeCards(room)
-        }
-      })
-    }
     return json({ state: this.view(this.room, player?.id) })
   }
 
@@ -311,11 +302,11 @@ export class Room {
         }
 
         switch (body.action) {
-          case 'ready':
-            setPlayerReady(room, actor.id, body.ready)
-            break
           case 'start-round':
             startRound(room)
+            break
+          case 'shuffle-cards':
+            distributeCards(room)
             break
           case 'begin-next-round':
             beginNextRound(room)
@@ -484,9 +475,6 @@ export class Room {
 
       const nextRoom = structuredClone(this.room)
       const result = operation(nextRoom)
-      if (nextRoom.phase === 'submitting' && everyoneSubmitted(nextRoom)) {
-        distributeCards(nextRoom)
-      }
       nextRoom.lastActivityAt = Date.now()
       await this.ctx.storage.put('room', nextRoom)
       this.room = nextRoom
@@ -563,12 +551,10 @@ export class Room {
       players: active.map((item) => ({
         id: item.id,
         nickname: item.nickname,
-        ready: item.ready,
         connected: item.connected,
         disconnectedAt: item.disconnectedAt,
         submitted: room.phase === 'submitting' && submittedIds.has(item.id),
       })),
-      allReady: everyoneReady(room),
       allSubmitted: room.phase === 'submitting' && everyoneSubmitted(room),
       nextReveal: room.nextReveal,
       starterId: room.starterId,

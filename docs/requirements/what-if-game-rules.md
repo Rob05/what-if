@@ -86,20 +86,20 @@ The online version uses the same imaginative, mismatched Question/Answer reveal 
 
 - A room has its own QR join code/link and can have one or more occupants. A playable round requires at least two active players.
 - Every room has a required 4–39 character display name, trimmed before validation and unique case-insensitively among active rooms. The name appears in the active-room directory and room header, including for private rooms. Release the name when its room closes or expires.
-- The landing page lists occupied, open rooms. It marks private rooms with a lock, and allows joining only while the room is in its lobby or between rounds.
+- The landing page lists occupied, open rooms. It marks private rooms with a lock, and allows joining while the room is in its lobby, between rounds, or collecting cards before they are shuffled.
 - A room may be public or private. Private rooms require a user-defined access code of at least five characters to join. The access code is separate from the room's invitation link and is checked by the server; it is not shown in public room listings or room state.
 - Creating a room requires a room name and the creator's nickname; creating the room also joins the creator as its first player.
 - Players join with a guest nickname, not a login username; no account is required.
 - Nicknames are unique in their room and 4–39 characters long after trimming.
-- All players mark Ready before a round can start. Once everyone is ready, any active player may start.
-- A room can host multiple rounds. New players may join between rounds.
+- Any active player may start a round once the room has at least two active players; there is no Ready step. Any active player may start a later round or resume a paused round once all remaining active players are connected.
+- A room can host multiple rounds. New players may join between rounds and during card submission, but not after cards are shuffled.
 - Rooms expire when empty.
 
 ### Online cards and reveal sequence
 
 - Each player submits one hidden card containing both a question and an answer. The question must begin with “What if…”.
 - Each question and answer is limited to 500 characters.
-- Once all active players have submitted, automatically shuffle and assign whole cards so nobody receives their own. The reveal phase begins immediately; no player needs to distribute the cards manually.
+- Once all active players have submitted, show a Shuffle cards button to every active player. Any active player may press it to shuffle and assign whole cards so nobody receives their own; the reveal phase begins, and the room no longer accepts new players until the next between-round period.
 - The starting player reveals the Question on their assigned card.
 - The next player reveals the Answer on their own assigned card, then reveals the Question on that same card. Continue in room order.
 - The starting player's Answer is revealed last, closing the chain. Every active player reveals one Answer to complete the round.
@@ -111,12 +111,12 @@ The online version uses the same imaginative, mismatched Question/Answer reveal 
 ### Ending and reviewing online games
 
 - After a completed round, any active player can choose to start another round or end the game.
-- Starting another round saves the completed reveal sequence to the room's history and returns players to the lobby. Everyone must be ready before any player can start the next round.
+- Starting another round saves the completed reveal sequence to the room's history and returns players to the lobby. Any active player may start the next round; there is no Ready step.
 - Ending the game requires confirmation, saves the completed round, and returns everyone to the lobby. All completed rounds remain available for review, and the room stays open.
 - After ending the game, any active player can confirm closing the room. A closed room no longer accepts joins or player access, but its data remains in the Durable Object store. Closing the room does not erase the stored history.
 
 ### Online departures and reconnection
 
 - A disconnected player has 30 seconds to reconnect. If they do not return, pause the active round.
-- Any active player may remove a disconnected player; all remaining players must mark Ready before the round resumes.
+- Any active player may remove a disconnected player. Once all remaining active players are connected, any active player may resume the round without a Ready step.
 - If a player explicitly leaves during an active round, remove the card assigned to them from that round. Keep their submitted card in play if another player received it.

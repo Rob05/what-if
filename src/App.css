@@ -236,12 +236,6 @@ p {
   background: #3a3834;
 }
 
-.button-ready {
-  border-color: #b6d6c1;
-  background: #e6f4e9;
-  color: #25613b;
-}
-
 .button-outline {
   border-color: var(--line);
   background: transparent;
@@ -956,13 +950,6 @@ p {
   margin-left: auto;
   padding: 0 7px;
   font-size: 10px;
-}
-
-.ready-check {
-  margin-left: auto;
-  color: #4d9a64;
-  font-size: 15px;
-  font-weight: 800;
 }
 
 .join-screen {

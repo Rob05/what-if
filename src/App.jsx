@@ -241,7 +241,7 @@ function HomePage({ onRoomCreated }) {
         ) : (
           <div className="room-directory-grid">
             {rooms.map((room) => {
-              const canJoin = ['lobby', 'completed'].includes(room.phase)
+              const canJoin = ['lobby', 'completed', 'submitting'].includes(room.phase)
               return (
                 <article className="room-directory-card" key={room.roomId}>
                   <div className="room-directory-info">
@@ -272,7 +272,7 @@ function HomePage({ onRoomCreated }) {
         <span>Good questions. Unexpected answers.</span>
         <details className="home-help">
           <summary>How to play</summary>
-          <p>Everyone writes a “What if…” and an answer on one card. The room shuffles the cards so nobody gets their own, then reads each player’s Question followed by the next player’s Answer.</p>
+          <p>Any player can start the round. Everyone writes a “What if…” and an answer on one card, then anyone can shuffle once all cards are submitted.</p>
         </details>
       </footer>
     </main>
@@ -541,13 +541,12 @@ function RoomPage({ roomId, onLeave }) {
     )
   }
 
-  const allReady = room.allReady
-  const pausedReady = room.players.length > 0
-    && room.players.every((player) => player.ready && player.connected)
   const myTurn = room.nextReveal?.playerId === myPlayer.id
   const nextIsQuestion = room.phase === 'revealing' && !room.nextReveal
-  const canStartRound = room.phase === 'lobby' && allReady
-  const canResume = room.phase === 'paused' && pausedReady
+  const canStartRound = room.phase === 'lobby' && room.players.length >= 2
+  const canResume = room.phase === 'paused'
+    && room.players.length > 0
+    && room.players.every((player) => player.connected)
 
   return (
     <main className="room-shell">
@@ -591,8 +590,6 @@ function RoomPage({ roomId, onLeave }) {
           {room.phase === 'lobby' && (
             <LobbyPanel
               room={room}
-              me={myPlayer}
-              onReady={(ready) => act('ready', { ready })}
               onStart={() => act('start-round')}
               onDelete={() => {
                 if (window.confirm('Close this room for everyone? Players will lose access, but saved data will be retained.')) {
@@ -608,6 +605,7 @@ function RoomPage({ roomId, onLeave }) {
               room={room}
               me={myPlayer}
               onSubmit={(question, answer) => act('submit', { question, answer })}
+              onShuffle={() => act('shuffle-cards')}
             />
           )}
 
@@ -623,9 +621,7 @@ function RoomPage({ roomId, onLeave }) {
 
           {room.phase === 'paused' && (
             <PausedPanel
-              me={myPlayer}
               canResume={canResume}
-              onReady={(ready) => act('ready', { ready })}
               onResume={() => act('resume')}
             />
           )}
@@ -648,24 +644,17 @@ function RoomPage({ roomId, onLeave }) {
   )
 }
 
-function LobbyPanel({ room, me, onReady, onStart, onDelete, canStart }) {
+function LobbyPanel({ room, onStart, onDelete, canStart }) {
   return (
     <section className="stage-card">
-      <span className="stage-number">01 / READY UP</span>
-      <h2>{room.gameEnded ? 'The game has ended.' : 'Everyone in? Get ready.'}</h2>
+      <span className="stage-number">01 / START ROUND</span>
+      <h2>{room.gameEnded ? 'The game has ended.' : 'Ready to begin?'}</h2>
       <p className="stage-copy">
         {room.gameEnded
-          ? 'The room is still open. Review completed rounds or ready up to play again.'
-          : 'A round starts when at least two players are connected and everyone is ready. Any player can kick things off once the room is set.'}
+          ? 'The room is still open. Review completed rounds or start another round.'
+          : 'Any player can start when at least two players are in the room. More people can join until cards are shuffled.'}
       </p>
       <div className="stage-action-row">
-        <button
-          className={`button ${me.ready ? 'button-ready' : 'button-primary'}`}
-          type="button"
-          onClick={() => onReady(!me.ready)}
-        >
-          {me.ready ? 'You’re ready ✓' : 'I’m ready'}
-        </button>
         <button
           className="button button-dark"
           type="button"
@@ -679,7 +668,7 @@ function LobbyPanel({ room, me, onReady, onStart, onDelete, canStart }) {
         <p className="helper-text">
           {room.players.length < 2
             ? 'Invite at least one more player to begin.'
-            : 'Waiting for every connected player to mark Ready.'}
+            : 'Waiting for another active player to join.'}
         </p>
       )}
       <RoundHistory history={room.history} />
@@ -692,7 +681,7 @@ function LobbyPanel({ room, me, onReady, onStart, onDelete, canStart }) {
   )
 }
 
-function SubmissionPanel({ room, me, onSubmit }) {
+function SubmissionPanel({ room, me, onSubmit, onShuffle }) {
   const [question, setQuestion] = useState('')
   const [answer, setAnswer] = useState('')
   const [submitting, setSubmitting] = useState(false)
@@ -706,13 +695,20 @@ function SubmissionPanel({ room, me, onSubmit }) {
           <h2>Your card is in the basket.</h2>
           <p className="stage-copy">
             {room.allSubmitted
-              ? 'Everyone has submitted. The cards are being shuffled and dealt.'
+              ? 'Everyone has submitted. Any player can shuffle the cards to begin the reveal.'
               : 'Your Question and Answer are hidden from the room until they are revealed.'}
           </p>
           <div className="waiting-row">
             <span className="waiting-spinner" aria-hidden="true" />
             <span>{room.players.filter((player) => player.submitted).length} of {room.players.length} cards submitted</span>
           </div>
+          {room.allSubmitted && (
+            <div className="stage-action-row">
+              <button className="button button-primary" type="button" onClick={onShuffle}>
+                Shuffle cards
+              </button>
+            </div>
+          )}
         </div>
       </section>
     )
@@ -929,28 +925,21 @@ function RoundTabs({ activeTab, onChange, tabs }) {
   )
 }
 
-function PausedPanel({ me, canResume, onReady, onResume }) {
+function PausedPanel({ canResume, onResume }) {
   return (
     <section className="stage-card paused-stage">
       <span className="stage-number">ROUND PAUSED</span>
       <h2>Let’s get everyone back on the same page.</h2>
       <p className="stage-copy">
         A player was disconnected for more than 30 seconds. They can still reconnect until
-        an active player removes them. All remaining players must be ready to resume.
+        an active player removes them. Any active player can resume once everyone remaining is connected.
       </p>
       <div className="stage-action-row">
-        <button
-          className={`button ${me.ready ? 'button-ready' : 'button-primary'}`}
-          type="button"
-          onClick={() => onReady(!me.ready)}
-        >
-          {me.ready ? 'You’re ready ✓' : 'I’m ready'}
-        </button>
         <button className="button button-dark" type="button" disabled={!canResume} onClick={onResume}>
           Resume round
         </button>
       </div>
-      {!canResume && <p className="helper-text">Waiting for every remaining connected player to be ready.</p>}
+      {!canResume && <p className="helper-text">Waiting for all remaining players to reconnect.</p>}
     </section>
   )
 }
@@ -973,7 +962,7 @@ function CompletedPanel({ room, onNextRound, onEndGame }) {
         </button>
       </div>
       <p className="helper-text">
-        Starting another round returns to the lobby; everyone must be ready before it begins.
+        Starting another round returns to the lobby; any active player can start it.
       </p>
     </section>
   )
@@ -1090,7 +1079,7 @@ function PlayersCard({ players, me, now, onRemove }) {
                 <span className="player-status">
                   {!player.connected ? timedOut ? 'Needs room decision' : 'Reconnecting'
                     : player.submitted ? 'Card submitted'
-                      : player.ready ? 'Ready' : 'In the room'}
+                      : 'In the room'}
                 </span>
                 {timedOut && (
                   <button
@@ -1102,7 +1091,6 @@ function PlayersCard({ players, me, now, onRemove }) {
                   </button>
                 )}
               </span>
-              {player.ready && <span className="ready-check" aria-label="Ready">✓</span>}
             </li>
           )
         })}

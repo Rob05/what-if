@@ -6,7 +6,6 @@ import {
   createRoom,
   distributeCards,
   endGame,
-  everyoneReady,
   everyoneSubmitted,
   normalizeNickname,
   normalizeRoomName,
@@ -16,12 +15,11 @@ import {
   removeExpiredDisconnectedPlayer,
   reveal,
   resumeRound,
-  setPlayerReady,
   startRound,
   submitCard,
 } from './game.js'
 
-function createReadyPlayers(count) {
+function createPlayers(count) {
   const room = createRoom('test-room')
   const players = Array.from({ length: count }, (_, index) => ({
     id: `player-${index + 1}`,
@@ -34,7 +32,6 @@ function createReadyPlayers(count) {
     const roomPlayer = room.players.find((item) => item.id === player.id)
     roomPlayer.connected = true
     roomPlayer.disconnectedAt = null
-    setPlayerReady(room, player.id, true)
   }
   return { room, players }
 }
@@ -72,28 +69,45 @@ describe('room setup', () => {
     expect(() => normalizeNickname('n'.repeat(40))).toThrow('Nicknames must be between 4 and 39 characters.')
   })
 
-  it('requires at least two connected ready players to start', () => {
+  it('requires at least two active players to start', () => {
     const room = createRoom('test-room')
     addPlayer(room, { id: 'one', nickname: 'Player One', token: 'token' })
     room.players[0].connected = true
-    setPlayerReady(room, 'one', true)
 
-    expect(everyoneReady(room)).toBe(false)
-    expect(() => startRound(room)).toThrow('At least two connected players must all be ready.')
+    expect(() => startRound(room)).toThrow('At least 2 active players are required to start a round.')
   })
 
-  it('starts card collection after all players are ready', () => {
-    const { room } = createReadyPlayers(2)
-
-    expect(everyoneReady(room)).toBe(true)
+  it('starts card collection without readiness confirmations', () => {
+    const { room } = createPlayers(2)
     startRound(room)
 
     expect(room.phase).toBe('submitting')
     expect(room.roundNumber).toBe(1)
   })
 
+  it('allows players to join submissions until cards are shuffled', () => {
+    const { room, players } = createPlayers(2)
+    startRound(room)
+    submitCard(room, players[0].id, 'What if clouds were green?', 'Then grass would be blue.')
+    addPlayer(room, { id: 'late-player', nickname: 'Late Player', token: 'late-token' })
+
+    expect(everyoneSubmitted(room)).toBe(false)
+    expect(() => distributeCards(room)).toThrow('Wait until every active player has submitted a card.')
+
+    submitCard(room, players[1].id, 'What if trees could sing?', 'Then birds would be quiet.')
+    submitCard(room, 'late-player', 'What if the moon was closer?', 'Then tides would be taller.')
+    expect(everyoneSubmitted(room)).toBe(true)
+    distributeCards(room, () => 0.4)
+
+    expect(() => addPlayer(room, {
+      id: 'after-shuffle',
+      nickname: 'After Shuffle',
+      token: 'after-token',
+    })).toThrow('You can only join between rounds or before cards are shuffled.')
+  })
+
   it('requires each question to begin with What if', () => {
-    const { room, players } = createReadyPlayers(2)
+    const { room, players } = createPlayers(2)
     startRound(room)
 
     expect(() => submitCard(room, players[0].id, 'Why is the sky blue?', 'Because of clouds.'))
@@ -103,7 +117,7 @@ describe('room setup', () => {
 
 describe('card distribution and reveal sequence', () => {
   it('assigns every card to a different player without self-assignment', () => {
-    const { room, players } = createReadyPlayers(4)
+    const { room, players } = createPlayers(4)
     startRound(room)
     submitForEveryone(room, players)
     expect(everyoneSubmitted(room)).toBe(true)
@@ -118,7 +132,7 @@ describe('card distribution and reveal sequence', () => {
   })
 
   it('keeps player identities stable while author names follow their randomly assigned cards', () => {
-    const { room, players } = createReadyPlayers(3)
+    const { room, players } = createPlayers(3)
     const playerIdentities = room.players.map(({ id, nickname }) => ({ id, nickname }))
     startRound(room)
     submitForEveryone(room, players)
@@ -151,7 +165,7 @@ describe('card distribution and reveal sequence', () => {
   })
 
   it('follows question, next player answer and question, ending with the starter answer', () => {
-    const { room, players } = createReadyPlayers(3)
+    const { room, players } = createPlayers(3)
     startRound(room)
     submitForEveryone(room, players)
     distributeCards(room, () => 0.4)
@@ -192,7 +206,7 @@ describe('card distribution and reveal sequence', () => {
   })
 
   it('keeps the final reveal visible until another round is selected, then archives the full round', () => {
-    const { room, players } = createReadyPlayers(2)
+    const { room, players } = createPlayers(2)
     completeTwoPlayerRound(room, players)
     const finalAnswer = room.reveals.at(-1)
 
@@ -208,14 +222,13 @@ describe('card distribution and reveal sequence', () => {
     expect(room.history[0].roundNumber).toBe(1)
     expect(room.history[0].reveals.at(-1)).toEqual(finalAnswer)
 
-    for (const player of players) setPlayerReady(room, player.id, true)
     startRound(room)
     expect(room.roundNumber).toBe(2)
     expect(room.history).toHaveLength(1)
   })
 
   it('ends a game into a reviewable lobby and closes a room without clearing its history', () => {
-    const { room, players } = createReadyPlayers(2)
+    const { room, players } = createPlayers(2)
     completeTwoPlayerRound(room, players)
     const finalAnswer = room.reveals.at(-1)
 
@@ -231,13 +244,13 @@ describe('card distribution and reveal sequence', () => {
   })
 
   it('does not allow closing a room before ending the game', () => {
-    const { room } = createReadyPlayers(2)
+    const { room } = createPlayers(2)
 
     expect(() => closeRoom(room)).toThrow('End the game before closing the room.')
   })
 
   it('removes a leaver’s assigned card while keeping their submitted card in play for its recipient', () => {
-    const { room, players } = createReadyPlayers(3)
+    const { room, players } = createPlayers(3)
     startRound(room)
     submitForEveryone(room, players)
     distributeCards(room, () => 0.4)
@@ -254,7 +267,7 @@ describe('card distribution and reveal sequence', () => {
   })
 
   it('continues the reveal chain after a player leaves during a round', () => {
-    const { room, players } = createReadyPlayers(3)
+    const { room, players } = createPlayers(3)
     startRound(room)
     submitForEveryone(room, players)
     distributeCards(room, () => 0.4)
@@ -269,8 +282,8 @@ describe('card distribution and reveal sequence', () => {
     expect(room.phase).toBe('completed')
   })
 
-  it('pauses after a reconnect timeout and resumes after removal and readiness', () => {
-    const { room, players } = createReadyPlayers(2)
+  it('pauses after a reconnect timeout and resumes after removal without readiness checks', () => {
+    const { room, players } = createPlayers(2)
     startRound(room)
     submitForEveryone(room, players)
     distributeCards(room, () => 0.4)
@@ -280,15 +293,27 @@ describe('card distribution and reveal sequence', () => {
     pauseRound(room, 31_000)
 
     removeExpiredDisconnectedPlayer(room, players[1].id, 31_000)
-    setPlayerReady(room, players[0].id, true)
     resumeRound(room)
 
     expect(room.phase).toBe('revealing')
     expect(room.nextReveal).toEqual({ playerId: players[0].id, type: 'answer' })
   })
 
+  it('requires remaining players to reconnect before resuming', () => {
+    const { room, players } = createPlayers(2)
+    startRound(room)
+    submitForEveryone(room, players)
+    distributeCards(room, () => 0.4)
+    reveal(room, players[0].id, 'question')
+    pauseRound(room)
+    room.players[1].connected = false
+
+    expect(() => resumeRound(room))
+      .toThrow('All remaining active players must be connected before resuming.')
+  })
+
   it('rejects removal before the reconnect grace period ends', () => {
-    const { room, players } = createReadyPlayers(2)
+    const { room, players } = createPlayers(2)
     room.players[1].connected = false
     room.players[1].disconnectedAt = 1000
 

@@ -265,7 +265,7 @@ describe('active room directory', () => {
     })
   })
 
-  it('automatically distributes cards after the final player submits', async () => {
+  it('allows joining until an active player shuffles after everyone submits', async () => {
     const directory = new RoomDirectory(createContext())
     const room = new Room(createContext(), {
       ROOM_DIRECTORY: createDirectoryBinding(directory),
@@ -275,7 +275,7 @@ describe('active room directory', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({
         roomId: '00000000-0000-0000-0000-000000000009',
-        roomName: 'Auto Deal Room',
+        roomName: 'Shuffle Cards Room',
         nickname: 'Host Player',
       }),
     }))
@@ -286,7 +286,6 @@ describe('active room directory', () => {
       body: JSON.stringify({ action: 'join', nickname: 'Guest Player' }),
     }))
     const { player: guest } = await joined.json()
-    const players = [host, guest]
     for (const player of room.room.players) {
       player.connected = true
       player.disconnectedAt = null
@@ -297,21 +296,46 @@ describe('active room directory', () => {
       headers: { 'content-type': 'application/json' },
       body: JSON.stringify({ action, ...player, ...fields }),
     }))
-    for (const player of players) {
-      await act(player, 'ready', { ready: true })
-    }
-    await act(host, 'start-round')
+    await act(guest, 'start-round')
     await act(host, 'submit', {
       question: 'What if the clouds were made of popcorn?',
       answer: 'Then the birds would bring butter.',
     })
     expect(room.room.phase).toBe('submitting')
 
-    const finalSubmission = await act(guest, 'submit', {
+    const lateJoin = await room.fetch(new Request('https://room.internal/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'join', nickname: 'Late Player' }),
+    }))
+    expect(lateJoin.status).toBe(201)
+    const { player: latePlayer, state: joinedState } = await lateJoin.json()
+    expect(joinedState).toMatchObject({
+      phase: 'submitting',
+      allSubmitted: false,
+    })
+
+    await act(guest, 'submit', {
       question: 'What if the ocean turned purple?',
       answer: 'Then the fish would wear sunglasses.',
     })
-    const { state } = await finalSubmission.json()
+    const finalSubmission = await act(latePlayer, 'submit', {
+      question: 'What if trees could dance?',
+      answer: 'Then the squirrels would play music.',
+    })
+    const { state: submittedState } = await finalSubmission.json()
+    expect(submittedState).toMatchObject({
+      phase: 'submitting',
+      allSubmitted: true,
+    })
+
+    const polledState = await room.fetch(new Request(
+      `https://room.internal/state?playerId=${latePlayer.playerId}&token=${latePlayer.token}`,
+    ))
+    expect((await polledState.json()).state.phase).toBe('submitting')
+
+    const shuffled = await act(latePlayer, 'shuffle-cards')
+    const { state } = await shuffled.json()
 
     expect(state).toMatchObject({
       phase: 'revealing',
@@ -321,6 +345,16 @@ describe('active room directory', () => {
         answer: expect.any(String),
       },
     })
+    const rejectedJoin = await room.fetch(new Request('https://room.internal/action', {
+      method: 'POST',
+      headers: { 'content-type': 'application/json' },
+      body: JSON.stringify({ action: 'join', nickname: 'After Shuffle' }),
+    }))
+    expect(rejectedJoin.status).toBe(400)
+    expect(await rejectedJoin.json()).toEqual({
+      error: 'You can only join between rounds or before cards are shuffled.',
+    })
+
     for (const player of room.room.players) {
       const card = room.room.cards.find((item) => item.id === room.room.assignments[player.id])
       expect(card.authorId).not.toBe(player.id)
@@ -386,17 +420,7 @@ describe('active room directory', () => {
         nickname: 'Host Player',
       }),
     }))
-    const { player } = await initialized.json()
-    await room.fetch(new Request('https://room.internal/action', {
-      method: 'POST',
-      headers: { 'content-type': 'application/json' },
-      body: JSON.stringify({
-        action: 'ready',
-        ready: true,
-        playerId: player.playerId,
-        token: player.token,
-      }),
-    }))
+    expect(initialized.status).toBe(201)
     room.room.players[0].disconnectedAt = Date.now() - 31_000
 
     await room.alarm()

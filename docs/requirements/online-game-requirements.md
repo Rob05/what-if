@@ -6,15 +6,15 @@ This document records the product decisions gathered before implementation. The 
 
 - The game supports multiple independent rooms, each with its own QR join code/link.
 - Room names are required, 4–39 characters after trimming, and unique case-insensitively among active rooms. Show the name in the active-room directory and room header, including for private rooms. Release the name when its room closes or expires.
-- The landing page lists occupied, open rooms and shows a lock for private rooms. Closed and empty rooms are not listed. Players can join a listed room only between rounds; a room in progress remains visible but cannot be joined until it is in the lobby or between rounds.
+- The landing page lists occupied, open rooms and shows a lock for private rooms. Closed and empty rooms are not listed. Players can join a listed room in the lobby or between rounds, and during card submission up until cards are shuffled. A room remains visible but does not accept joins after shuffling until the next between-round period.
 - A room can be created as public or private. A private room has a user-defined access code of at least five characters, separate from its room ID and invitation link. The landing page shows private rooms as locked; joining one requires the correct code, which is validated by the server and never included in public room listings or state.
 - A room can have one or more occupants, but a round requires at least two active players.
 - Creating a room requires the room name and creator's nickname; the creator joins as the first player.
 - Players join as guests using a nickname, not a login username; accounts are not required.
 - Nicknames are unique within a room and 4–39 characters after trimming.
-- Every player must mark Ready before a round can start. Once everyone is ready, any active player may start it.
-- New players may join between rounds.
-- Automatically shuffle and assign cards as soon as all active players have submitted; no player action is needed to start the reveal phase.
+- Any active player may start a round once there are at least two active players. There is no Ready step; any active player may also start later rounds.
+- New players may join between rounds or during card submission until cards are shuffled.
+- After all active players have submitted, show a Shuffle cards action to all active players. Any active player may press it to shuffle and assign cards and start the reveal phase.
 - Empty rooms expire. Players have 30 seconds to reconnect after losing connection.
 
 ## Cards and reveal sequence
@@ -22,7 +22,7 @@ This document records the product decisions gathered before implementation. The 
 - Every player submits one card containing both a question and an answer. Questions must begin with “What if…”.
 - Questions and answers are limited to 500 characters each.
 - Submitted content is hidden from other players until it is revealed.
-- As soon as every active player has submitted, automatically shuffle and assign cards so no player receives their own card.
+- Once every active player has submitted, wait for any active player to press Shuffle cards. Then shuffle and assign cards so no player receives their own card; do not accept new players after this action.
 - The player's nickname is attached to their submitted card. Keep card author details hidden from the room until the card's first field is revealed.
 - One player starts by revealing the Question on their assigned card.
 - The next player reveals the Answer on their own assigned card, then reveals the Question on that same card.
@@ -41,11 +41,11 @@ This document records the product decisions gathered before implementation. The 
 - The same room can play multiple rounds using fresh cards.
 - Keep the final revealed answer and completed round visible until a player chooses what happens next.
 - During an active round, the menu's Leave game action removes only that player according to the existing departure rules. After a round completes, label the equivalent action Return to lobby; it also removes only that player and returns them to the home screen. Do not add a per-player lobby or spectator state.
-- Any active player may choose to start another round or end the game. Starting another round archives the completed round and returns everyone to the lobby; all active players must be ready before any player can start the next round.
+- Any active player may choose to start another round or end the game. Starting another round archives the completed round and returns everyone to the lobby; any active player can start the next round without a Ready step.
 - Ending the game requires confirmation and returns everyone to the lobby. Keep every completed round available there for review, and leave the room open so players may review or play again later.
 - From the lobby after ending the game, any active player may confirm that the room should be closed. Once closed, deny player access and new joins, but retain the room data in the Durable Object store; closing a room is not a request to erase its stored data.
 - If a player disconnects, allow 30 seconds to reconnect. If they do not return, pause the active round.
-- Any active player may remove a disconnected player. The remaining players must all mark Ready before resuming.
+- Any active player may remove a disconnected player. Once all remaining active players are connected, any active player may resume without a Ready step.
 - If a player explicitly leaves during a round, remove the card assigned to that player from the round. Keep their submitted card in play if another player received it.
 - When a room becomes empty, expire it.
 

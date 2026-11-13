@@ -61,8 +61,8 @@ export function createRoom(roomId, now = Date.now(), roomName = null) {
 }
 
 export function addPlayer(room, { id, nickname, token, now = Date.now() }) {
-  if (!['lobby', 'completed'].includes(room.phase)) {
-    throw new Error('You can only join between rounds.')
+  if (!['lobby', 'completed', 'submitting'].includes(room.phase)) {
+    throw new Error('You can only join between rounds or before cards are shuffled.')
   }
 
   const cleanNickname = normalizeNickname(nickname)
@@ -76,7 +76,6 @@ export function addPlayer(room, { id, nickname, token, now = Date.now() }) {
     id,
     nickname: cleanNickname,
     token,
-    ready: false,
     connected: false,
     connectionId: null,
     disconnectedAt: now,
@@ -89,26 +88,12 @@ export function activePlayers(room) {
   return room.players.filter((player) => !player.removed)
 }
 
-export function setPlayerReady(room, playerId, ready) {
-  const player = requireActivePlayer(room, playerId)
-  if (!['lobby', 'paused'].includes(room.phase)) {
-    throw new Error('Readiness can only be changed between rounds or while paused.')
-  }
-  player.ready = Boolean(ready)
-}
-
-export function everyoneReady(room) {
-  const players = activePlayers(room)
-  return players.length >= MIN_PLAYERS
-    && players.every((player) => player.ready && player.connected)
-}
-
 export function startRound(room) {
   if (room.phase !== 'lobby') {
     throw new Error('A round is already in progress.')
   }
-  if (!everyoneReady(room)) {
-    throw new Error('At least two connected players must all be ready.')
+  if (activePlayers(room).length < MIN_PLAYERS) {
+    throw new Error(`At least ${MIN_PLAYERS} active players are required to start a round.`)
   }
 
   room.phase = 'submitting'
@@ -123,9 +108,6 @@ export function startRound(room) {
   room.answeredPlayerIds = []
   room.questionedPlayerIds = []
   room.pausedAt = null
-  for (const player of activePlayers(room)) {
-    player.ready = false
-  }
 }
 
 export function beginNextRound(room) {
@@ -266,9 +248,6 @@ export function reveal(room, playerId, type) {
       room.phase = 'completed'
       room.nextReveal = null
       room.starterId = null
-      for (const activePlayer of activePlayers(room)) {
-        activePlayer.ready = false
-      }
     } else if (!room.questionedPlayerIds.includes(playerId)) {
       room.nextReveal = { playerId, type: 'question' }
     } else {
@@ -288,9 +267,6 @@ export function pauseRound(room, now = Date.now()) {
   }
   room.phase = 'paused'
   room.pausedAt = now
-  for (const player of activePlayers(room)) {
-    player.ready = false
-  }
   return true
 }
 
@@ -298,20 +274,17 @@ export function resumeRound(room) {
   if (room.phase !== 'paused') {
     throw new Error('The round is not paused.')
   }
-  if (!everyoneReadyWhilePaused(room)) {
-    throw new Error('All remaining connected players must be ready to resume.')
+  const players = activePlayers(room)
+  if (!players.length || players.some((player) => !player.connected)) {
+    throw new Error('All remaining active players must be connected before resuming.')
   }
   room.phase = 'revealing'
   room.pausedAt = null
-  for (const player of activePlayers(room)) {
-    player.ready = false
-  }
 }
 
 export function removePlayer(room, playerId) {
   const player = requireActivePlayer(room, playerId)
   player.removed = true
-  player.ready = false
   player.connected = false
   player.connectionId = null
   player.disconnectedAt = null
@@ -322,9 +295,6 @@ export function removePlayer(room, playerId) {
       room.phase = 'lobby'
       room.roundNumber = Math.max(0, room.roundNumber - 1)
       room.cards = []
-      for (const activePlayer of activePlayers(room)) {
-        activePlayer.ready = false
-      }
     }
   }
   if (['revealing', 'paused'].includes(room.phase) && room.assignments[playerId]) {
@@ -360,11 +330,6 @@ export function removeExpiredDisconnectedPlayer(room, playerId, now = Date.now()
 
 export function roomIsExpired(room) {
   return activePlayers(room).length === 0
-}
-
-export function everyoneReadyWhilePaused(room) {
-  const players = activePlayers(room)
-  return players.length > 0 && players.every((player) => player.ready && player.connected)
 }
 
 export function requireActivePlayer(room, playerId) {
@@ -409,9 +374,6 @@ function completeRound(room) {
   room.nextReveal = null
   room.starterId = null
   room.pausedAt = null
-  for (const player of activePlayers(room)) {
-    player.ready = false
-  }
 }
 
 function archiveCompletedRound(room) {
@@ -436,7 +398,4 @@ function resetRound(room) {
   room.answeredPlayerIds = []
   room.questionedPlayerIds = []
   room.pausedAt = null
-  for (const player of activePlayers(room)) {
-    player.ready = false
-  }
 }
